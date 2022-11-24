@@ -12,6 +12,7 @@ from itertools import count
 import attr
 import enum
 import logging
+import libevdev
 
 import ratbag.util
 
@@ -618,6 +619,14 @@ class Profile(Feature):
         capability changing the report rate on one profile also changes it on
         all other profiles.
         """
+        WIRELESS = 105
+        """
+        The device is wireless and have battery-related settings.
+        """
+        PERSISTENT = 106
+        """
+        The profile is persistent and cannot be deleted.
+        """
 
     def __init__(
         self,
@@ -628,6 +637,13 @@ class Profile(Feature):
         report_rate=None,
         report_rates=(),
         active=False,
+        response=0,
+        responses=tuple(),
+        snapping=False,
+        distance=0,
+        sleep_timeout=0,
+        sleep_timeouts=tuple(),
+        battery_alert=0,
     ):
         super().__init__(device, index)
         self.name = f"Unnamed {index}" if name is None else name
@@ -640,7 +656,18 @@ class Profile(Feature):
         self._report_rate = report_rate
         self._report_rates = tuple(sorted(set(report_rates)))
         self._capabilities = tuple(sorted(set(capabilities)))
+        self._response = response
+        self._responses = responses
+        self._snapping = snapping
+        self._distance = distance
+        self._sleep_timeout = sleep_timeout
+        self._sleep_timeouts = sleep_timeouts
+        self._battery_alert = battery_alert
         self.device._add_profile(self)
+
+    @GObject.Signal()
+    def on_activated(self, *args):
+        pass
 
     @property
     def buttons(self) -> Tuple["ratbag.Button", ...]:
@@ -688,6 +715,100 @@ class Profile(Feature):
         support configurable report rates, the tuple is the empty tuple"""
         return self._report_rates
 
+    @GObject.Property(type=int, default=0, flags=GObject.ParamFlags.READABLE)
+    def response(self) -> int:
+        """
+        Get button response time in ms.
+        """
+        return self._response
+
+    def set_response(self, response: int) -> None:
+        """
+        Set button response time in ms.
+        """
+        if response != self._response:
+            self._response = response
+            self.dirty = True  # type: ignore
+            self.notify('response')
+
+    @property
+    def responses(self) -> Tuple[int, ...]:
+        """
+        The tuple of supported button response in ms.
+        """
+        return self._responses
+
+    @GObject.Property(type=bool, default=0, flags=GObject.ParamFlags.READABLE)
+    def snapping(self) -> bool:
+        """
+        Get angle snapping state.
+        """
+        return self._snapping
+
+    def set_snapping(self, snapping: bool) -> None:
+        """
+        Set angle snapping state.
+        """
+        if snapping != self._snapping:
+            self._snapping = snapping
+            self.dirty = True  # type: ignore
+            self.notify('snapping')
+
+    @GObject.Property(type=int, default=0, flags=GObject.ParamFlags.READABLE)
+    def distance(self) -> int:
+        """
+        Get angle snapping state.
+        """
+        return self._distance
+
+    def set_distance(self, distance: int) -> None:
+        """
+        Set angle snapping state.
+        """
+        if distance != self._distance:
+            self._distance = distance
+            self.dirty = True  # type: ignore
+            self.notify('distance')
+
+    @GObject.Property(type=int, default=0, flags=GObject.ParamFlags.READABLE)
+    def sleep_timeout(self) -> int:
+        """
+        Get sleep timeout.
+        """
+        return self._sleep_timeout
+
+    def set_sleep_timeout(self, sleep: int) -> None:
+        """
+        Set sleep timeout.
+        """
+        if sleep != self._sleep_timeout:
+            self._sleep_timeout = sleep
+            self.dirty = True  # type: ignore
+            self.notify('sleep-timeout')
+
+    @property
+    def sleep_timeouts(self) -> Tuple[int, ...]:
+        """
+        Get sleep timeout choices.
+        """
+        return self._sleep_timeouts
+
+    @GObject.Property(type=int, default=0, flags=GObject.ParamFlags.READABLE)
+    def battery_alert(self) -> int:
+        """
+        Get battery alert level.
+        """
+        return self._battery_alert
+
+    def set_battery_alert(self, alert: int) -> None:
+        """
+        Set battry alert level.
+        """
+        if alert != self._battery_alert:
+            self._battery_alert = alert
+            self.dirty = True  # type: ignore
+            self.notify('battery-alert')
+
     @property
     def capabilities(self) -> Tuple[Capability, ...]:
         """
@@ -726,10 +847,10 @@ class Profile(Feature):
         if not self.active:
             for p in filter(lambda p: p.active, self.device.profiles):
                 p._active = False
-                p.dirty = True  # type: ignore
+                # p.dirty = True  # type: ignore
                 p.notify("active")
             self._active = True
-            self.dirty = True  # type: ignore
+            # self.dirty = True  # type: ignore
             self.notify("active")
 
     @GObject.Property(type=bool, default=False, flags=GObject.ParamFlags.READABLE)
@@ -883,10 +1004,11 @@ class Resolution(Feature):
             for r in self.profile.resolutions:
                 if r._active:
                     r._active = False
+                    # r.dirty = True  # type: ignore
                     r.notify("active")
-                    r.dirty = True  # type: ignore
             self._active = True
-            self.dirty = True  # type: ignore
+            # self.dirty = True  # type: ignore
+            self.notify("active")
 
     @GObject.Property(type=bool, default=False, flags=GObject.ParamFlags.READABLE)
     def default(self) -> bool:
@@ -972,7 +1094,7 @@ class Action(GObject.Object):
         NONE = 0
         BUTTON = 1
         SPECIAL = 2
-        # KEY is 3 in libratbag
+        KEY = 3
         MACRO = 4
         UNKNOWN = 1000
 
@@ -1043,6 +1165,38 @@ class ActionButton(Action):
 
     def __eq__(self, other):
         return type(self) == type(other) and self.button == other.button
+
+
+class ActionKey(Action):
+    def __init__(self, parent, key):
+        super().__init__(parent)
+        if type(key) == str:
+            if hasattr(libevdev.EV_KEY, key):
+                ekey = getattr(libevdev.EV_KEY, key)
+                self._key = ekey.value
+            else:
+                self._key = 0
+        else:
+            self._key = key
+        self._type = Action.Type.KEY
+
+    @property
+    def key(self) -> int:
+        return self._key
+
+    def __str__(self) -> str:
+        return f'Key {self.key}'
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            **super().as_dict(),
+            **{
+                'key': self.key,
+            },
+        }
+
+    def __eq__(self, other):
+        return type(self) == type(other) and self.key == other.key
 
 
 class ActionSpecial(Action):
@@ -1259,6 +1413,10 @@ class Led(Feature):
         ON = 1
         CYCLE = 2
         BREATHING = 3
+        WAVE = 4
+        REACTIVE = 5
+        FLASHER = 6
+        BATTERY = 7
 
     def __init__(
         self,

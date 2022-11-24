@@ -402,6 +402,7 @@ class DeviceInfo:
         vidstr = find_prop(device, "ID_VENDOR_ID")
         pidstr = find_prop(device, "ID_MODEL_ID")
         busstr = find_prop(device, "ID_BUS")
+        bus = 'usb'
         if not vidstr or not pidstr or not busstr:
             hidstr = find_prop(device, "HID_ID")
             assert hidstr

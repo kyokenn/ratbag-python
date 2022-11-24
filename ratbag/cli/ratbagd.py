@@ -122,6 +122,8 @@ class RatbagResolution(ServiceInterface):
         )
         bus.export(self.objpath, self)
 
+        self._resolution.connect('notify::active', self._on_active)
+
     @dbus_property(access=PropertyAccess.READ)
     def Index(self) -> "u":  # type: ignore
         return self._resolution.index
@@ -164,11 +166,21 @@ class RatbagResolution(ServiceInterface):
 
     @method()
     def SetActive(self) -> "u":  # type: ignore
+        # deactivate other resolutions and activate current one
+        # with notification "notify::active" and invoking _on_active()
         self._resolution.set_active()
-        self.emit_properties_changed(
-            {"IsActive": True},
-        )
+        # self.emit_properties_changed(
+        #     {"IsActive": True},
+        # )
         return 0
+
+    def _on_active(self, profile, pspec):
+        """
+        Notification callback which emits current resolution state to dbus.
+        """
+        self.emit_properties_changed(
+            {"IsActive": self._resolution.active},
+        )
 
     @method()
     def SetDefault(self) -> "u":  # type: ignore
@@ -225,7 +237,7 @@ class RatbagLed(ServiceInterface):
     def Color(self, color: "(uuu)"):  # type: ignore
         r, g, b = color
         self._led.set_color((r, g, b))
-        self.emit_properties_changed({"Color": (r, g, b)})
+        self.emit_properties_changed({"Color": [r, g, b]})
 
     @dbus_property(access=PropertyAccess.READ)
     def ColorDepth(self) -> "u":  # type: ignore
@@ -278,8 +290,8 @@ class RatbagButton(ServiceInterface):
             value = dbus_next.Variant("u", int(action.button))
         elif action.type == ratbag.Action.Type.SPECIAL:
             value = dbus_next.Variant("u", int(action.special))
-        # elif action.type == ratbag.Action.Type.KEY:
-        #    value = dbus_next.Variant("u", int(ratbag.Action.Type.UNKNOWN))  # FIXME
+        elif action.type == ratbag.Action.Type.KEY:
+           value = dbus_next.Variant("u", int(action.key))
         elif action.type == ratbag.Action.Type.MACRO:
             value = dbus_next.Variant(
                 "a(uu)", [[e[0].value, e[1]] for e in action.events]
@@ -297,13 +309,13 @@ class RatbagButton(ServiceInterface):
 
         if type == int(ratbag.Action.Type.BUTTON):
             action = ratbag.ActionButton(self._button, variant.value)
-        elif action.type == ratbag.Action.Type.SPECIAL:
+        elif type == int(ratbag.Action.Type.SPECIAL):
             action = ratbag.ActionSpecial(
                 self._button, ratbag.ActionSpecial.Special(variant.value)
             )
-        # if action.type == ratbag.Action.Type.KEY:
-        #    action = None  # FIXME
-        if action.type == ratbag.Action.Type.MACRO:
+        elif type == int(ratbag.Action.Type.KEY):
+           action = ratbag.ActionKey(self._button, variant.value)
+        elif type == int(ratbag.Action.Type.MACRO):
             events = [(ratbag.ActionMacro.Event(t), v) for t, v in variant.value]
             action = ratbag.ActionMacro(self._button, events=events)
         self._button.set_action(action)
@@ -333,6 +345,8 @@ class RatbagProfile(ServiceInterface):
         self._leds = [RatbagLed(bus, r) for r in ratbag_profile.leds]
         bus.export(self.objpath, self)
 
+        self._profile.connect('notify::active', self._on_active)
+
     @dbus_property(access=PropertyAccess.READ)
     def Index(self) -> "u":  # type: ignore
         return self._profile.index
@@ -343,13 +357,7 @@ class RatbagProfile(ServiceInterface):
 
     @dbus_property(access=PropertyAccess.READ)
     def Capabilities(self) -> "au":  # type: ignore
-        mapping = {
-            ratbag.Profile.Capability.SET_DEFAULT: 101,
-            ratbag.Profile.Capability.DISABLE: 102,
-            ratbag.Profile.Capability.WRITE_ONLY: 103,
-            ratbag.Profile.Capability.INDIVIDUAL_REPORT_RATE: 103,
-        }
-        return [mapping[c] for c in self._profile.capabilities]
+        return list(self._profile.capabilities)
 
     @dbus_property(access=PropertyAccess.READWRITE)
     def Enabled(self) -> "b":  # type: ignore
@@ -369,7 +377,55 @@ class RatbagProfile(ServiceInterface):
 
     @ReportRate.setter  # type: ignore
     def ReportRate(self, rate: int):  # type: ignore
-        self._profile.report_rate = rate
+        self._profile.set_report_rate(rate)
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Responses(self) -> "au":  # type: ignore
+        return list(self._profile.responses)
+
+    @dbus_property(access=PropertyAccess.READWRITE)
+    def Response(self) -> "u":  # type: ignore
+        return self._profile.response
+
+    @Response.setter  # type: ignore
+    def Response(self, response: int):  # type: ignore
+        self._profile.set_response(response)
+
+    @dbus_property(access=PropertyAccess.READWRITE)
+    def Snapping(self) -> "b":  # type: ignore
+        return self._profile.snapping
+
+    @Snapping.setter  # type: ignore
+    def Snapping(self, snapping: bool):  # type: ignore
+        self._profile.set_snapping(snapping)
+
+    @dbus_property(access=PropertyAccess.READWRITE)
+    def Distance(self) -> "u":  # type: ignore
+        return self._profile.distance
+
+    @Distance.setter  # type: ignore
+    def Distance(self, distance: int):  # type: ignore
+        self._profile.set_distance(distance)
+
+    @dbus_property(access=PropertyAccess.READWRITE)
+    def BatteryAlert(self) -> "u":  # type: ignore
+        return self._profile.battery_alert
+
+    @BatteryAlert.setter  # type: ignore
+    def BatteryAlert(self, alert: int):  # type: ignore
+        self._profile.set_battery_alert(alert)
+
+    @dbus_property(access=PropertyAccess.READWRITE)
+    def SleepTimeout(self) -> "u":  # type: ignore
+        return self._profile.sleep_timeout
+
+    @SleepTimeout.setter  # type: ignore
+    def SleepTimeout(self, sleep: int):  # type: ignore
+        self._profile.set_sleep_timeout(sleep)
+
+    @dbus_property(access=PropertyAccess.READ)
+    def SleepTimeouts(self) -> "au":  # type: ignore
+        return list(self._profile.sleep_timeouts)
 
     @dbus_property(access=PropertyAccess.READ)
     def IsActive(self) -> "b":  # type: ignore
@@ -393,11 +449,21 @@ class RatbagProfile(ServiceInterface):
 
     @method()
     def SetActive(self) -> "u":  # type: ignore
+        # deactivate other profiles and activate current one
+        # with notification "notify::active" and invoking _on_active()
         self._profile.set_active()
-        self.emit_properties_changed(
-            {"IsActive": True},
-        )
+        # self.emit_properties_changed(
+        #     {"IsActive": self._profile.active},
+        # )
         return 0
+
+    def _on_active(self, profile, pspec):
+        """
+        Notification callback which emits current profile state to dbus.
+        """
+        self.emit_properties_changed(
+            {"IsActive": self._profile.active},
+        )
 
     @method()
     def SetDefault(self) -> "u":  # type: ignore
