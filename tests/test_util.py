@@ -188,7 +188,10 @@ def test_parser():
 
     # Test the class name for the reply object
     data = bytes(range(64, 73))
-    spec = [Spec("B", "something")]
+    spec = [
+        Spec("B", "something"),
+        Spec("B", "__ignored"),  # double leading underscore is ignored
+    ]
     result = Parser.to_object(data, spec, result_class="Foo")
     assert type(result.object).__name__ == "Foo"
 
@@ -197,6 +200,13 @@ def test_parser():
         def __init__(self, something):
             pass
 
+    result = Parser.to_object(data, spec, result_class=TestResult)
+    assert isinstance(result.object, TestResult)
+
+    spec = [
+        Spec("B", "_something"),  # single leading underscore is dropped
+        Spec("B", "__ignored"),  # double leading underscore is ignored
+    ]
     result = Parser.to_object(data, spec, result_class=TestResult)
     assert isinstance(result.object, TestResult)
 
@@ -241,3 +251,17 @@ def test_data_files():
         driver="roccat",
     )
     assert xtd in datafiles
+
+
+def test_ffs():
+    from ratbag.util import ffs
+
+    assert ffs(0) == 0
+    assert ffs(1) == 1
+    assert ffs(2) == 2
+    assert ffs(4) == 3
+
+    assert ffs(3) == 1
+    assert ffs(6) == 2
+
+    assert ffs(1 << 32) == 33  # this isn't C with 4-byte integers

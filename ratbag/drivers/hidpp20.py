@@ -5,7 +5,7 @@
 # This file is formatted with Python Black
 #
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 import attr
 import enum
@@ -171,6 +171,7 @@ class Feature(object):
     name: FeatureName = attr.ib()
     index: int = attr.ib()
     type: int = attr.ib()
+    version: int = attr.ib()
 
 
 @attr.s
@@ -181,6 +182,11 @@ class Color:
 
     def __str__(self):
         return f"rgb({self.red},{self.green},{self.blue})"
+
+    def __iter__(self):
+        yield self.red
+        yield self.green
+        yield self.blue
 
 
 @attr.s
@@ -194,15 +200,12 @@ class Profile(object):
     report_rates: List[int] = attr.ib(default=attr.Factory(list))
     initial_data: bytes = attr.ib(default=bytes())
     leds: List["Led"] = attr.ib(default=attr.Factory(list))
+    buttons: List["Button"] = attr.ib(default=attr.Factory(list))
     """
     The initial data this profile was created from. This data is constant
     for the life of the profile and can be used to restore the profile to
     its original state.
     """
-
-    @property
-    def report_rate(self) -> int:
-        return 1000 // max(1, self._report_rate)  # type: ignore
 
     @property
     def name(self) -> str:
@@ -222,19 +225,19 @@ class Profile(object):
     def from_data(cls, address: int, enabled: bool, data: bytes):
         profile = cls(address, enabled, initial_data=data)
         spec = [
-            Spec("B", "_report_rate"),
+            Spec("B", "report_rate", convert_from_data=lambda x: 1000 // max(1, x)),
             Spec("B", "default_dpi"),
             Spec("B", "switched_dpi"),
             Spec("HHHHH", "dpi", endian="le"),
             Spec("BBB", "colors"),
             Spec("B", "power_mode"),
             Spec("B", "angle_snapping"),
-            Spec("B", "_", repeat=10),  # reserved
+            Spec("B" * 10, "_"),  # reserved
             Spec("H", "powersafe_timeout", endian="le"),
             Spec("H", "poweroff_timeout", endian="le"),
-            Spec("I", "_button_bindings", repeat=16),
-            Spec("I", "_alternate_button_bindings", repeat=16),
-            Spec("B", "_name", repeat=16 * 3, endian="le"),
+            Spec("BBBB", "_button_bindings", repeat=16),
+            Spec("BBBB", "_alternate_button_bindings", repeat=16),
+            Spec("B" * 16 * 3, "_name"),
             Spec("B" * 11, "_leds", repeat=2),
             Spec("B" * 11, "_alt_leds", repeat=2),
             Spec("BB", "_"),
@@ -242,7 +245,14 @@ class Profile(object):
 
         Parser.to_object(data, spec, profile)
         for leddata in profile._leds:  # type: ignore
-            profile.leds.append(Led.from_data(leddata))
+            led = Led.from_data(bytes(leddata))
+            logger.debug(led)
+            profile.leds.append(led)
+
+        for buttondata in profile._button_bindings:  # type: ignore
+            b = Button.from_data(bytes(buttondata))
+            logger.debug(b)
+            profile.buttons.append(b)
 
         return profile
 
@@ -260,9 +270,14 @@ class Profile(object):
 class ProfileAddress(object):
     address: int = attr.ib()
     enabled: bool = attr.ib()
+    index: int = attr.ib()
 
     @classmethod
     def from_sector(cls, data: bytes, index: int):
+        """
+        Given data is a sector read from the device, return the profile
+        address for the profile with the given index.
+        """
         addr_offset = 4 * index
         spec = [Spec("H", "addr", endian="BE")]
         result = Parser.to_object(data[addr_offset:], spec).object
@@ -278,7 +293,212 @@ class ProfileAddress(object):
 
         enabled = data[addr_offset + OnboardProfile.Sector.ENABLED_INDEX] != 0
 
-        return cls(result.addr, enabled)
+        return cls(address=result.addr, enabled=enabled, index=index)
+
+
+@attr.s
+class Button(object):
+    """
+    Parent class for all buttons. Buttons have a type which is used to
+    instantiate the actual object parsed, see :meth:`Button.from_data`.
+
+    Those subclasses have the specific parsing instructions then.
+    """
+
+    class Type(enum.IntEnum):
+        MACRO = 0x00
+        HID = 0x80
+        SPECIAL = 0x90
+        DISABLED = 0xFF
+
+        @staticmethod
+        def get_class(type: "Button.Type") -> Type["Button"]:
+            return {
+                Button.Type.MACRO: ButtonMacro,
+                Button.Type.HID: ButtonHid,  # Should never be instantiated directly
+                Button.Type.SPECIAL: ButtonMacro,
+                Button.Type.DISABLED: ButtonDisabled,
+            }[type]
+
+        @staticmethod
+        def from_class(obj: "Button") -> "Button.Type":
+            mapping = {
+                ButtonMacro: Button.Type.MACRO,
+                ButtonHid: Button.Type.HID,
+                ButtonSpecial: Button.Type.SPECIAL,
+                ButtonDisabled: Button.Type.DISABLED,
+            }
+            return next(iter(v for k, v in mapping.items() if isinstance(obj, k)))
+
+    class HidType(enum.IntEnum):
+        NOOP = 0x00
+        MOUSE = 0x01
+        KEYBOARD = 0x02
+        CONSUMER_CONTROL = 0x03
+
+        @staticmethod
+        def get_class(type: "Button.HidType") -> Type["ButtonHid"]:
+            return {
+                Button.HidType.NOOP: ButtonNoop,
+                Button.HidType.MOUSE: ButtonButton,
+                Button.HidType.KEYBOARD: ButtonKeyboard,
+                Button.HidType.CONSUMER_CONTROL: ButtonConsumerControl,
+            }[type]
+
+        @staticmethod
+        def from_class(obj: "ButtonHid") -> "Button.HidType":
+            mapping = {
+                ButtonNoop: Button.HidType.NOOP,
+                ButtonButton: Button.HidType.MOUSE,
+                ButtonKeyboard: Button.HidType.KEYBOARD,
+                ButtonConsumerControl: Button.HidType.CONSUMER_CONTROL,
+            }
+            return next(iter(v for k, v in mapping.items() if isinstance(obj, k)))
+
+    type: "Type" = attr.ib()
+
+    @type.validator
+    def type_validator(self, attribute, value):
+        if value != Button.Type.from_class(self):
+            raise ValueError(f"Invalid type {value} for {type(self)}")
+
+    @classmethod
+    def from_data(cls, data: bytes) -> "Button":
+        type = Button.Type(data[0])
+        if type == Button.Type.HID:
+            hidtype = Button.HidType(data[1])
+            if hidtype == Button.HidType.MOUSE:
+                clstype: Type = ButtonButton
+            elif hidtype == Button.HidType.KEYBOARD:
+                clstype = ButtonKeyboard
+            elif hidtype == Button.HidType.CONSUMER_CONTROL:
+                clstype = ButtonConsumerControl
+        elif type == Button.Type.SPECIAL:
+            clstype = ButtonSpecial
+        elif type == Button.Type.MACRO:
+            clstype = ButtonMacro
+        elif type == Button.Type.DISABLED:
+            clstype = ButtonDisabled
+        else:
+            logger.error("Unable to handle button type {data[0]}")
+            clstype = ButtonDisabled
+
+        return Parser.to_object(data, clstype.specs, result_class=clstype).object
+
+
+@attr.s
+class ButtonHid(Button):
+    type: Button.Type = attr.ib()
+    hidtype: Button.HidType = attr.ib()
+
+    @hidtype.validator
+    def hidtype_validator(self, attribute, value):
+        if value != Button.HidType.from_class(self):
+            raise ValueError(f"Invalid type {value} for {type(self)}")
+
+
+@attr.s
+class ButtonNoop(ButtonHid):
+    specs = [
+        Spec("B", "type", convert_from_data=lambda x: Button.Type(x)),
+        Spec("B", "hidtype", convert_from_data=lambda x: Button.HidType(x)),
+    ]
+    type: Button.Type = attr.ib()
+    hidtype: Button.HidType = attr.ib()
+
+
+@attr.s
+class ButtonButton(ButtonHid):
+    specs = [
+        Spec("B", "type", convert_from_data=lambda x: Button.Type(x)),
+        Spec("B", "hidtype", convert_from_data=lambda x: Button.HidType(x)),
+        Spec("H", "button", convert_from_data=lambda x: ratbag.util.ffs(x)),
+    ]
+    type: Button.Type = attr.ib()
+    hidtype: Button.HidType = attr.ib()
+    button: int = attr.ib()
+
+
+@attr.s
+class ButtonKeyboard(Button):
+    specs = [
+        Spec("B", "type", convert_from_data=lambda x: Button.Type(x)),
+        Spec("B", "hidtype", convert_from_data=lambda x: Button.HidType(x)),
+        Spec("B", "modifier_flags"),
+        Spec("B", "key"),
+    ]
+    type: Button.Type = attr.ib()
+    hidtype: Button.HidType = attr.ib()
+    modifier_flags: int = attr.ib()
+    key: int = attr.ib()
+
+
+@attr.s
+class ButtonConsumerControl(Button):
+    specs = [
+        Spec("B", "type", convert_from_data=lambda x: Button.Type(x)),
+        Spec("B", "hidtype", convert_from_data=lambda x: Button.HidType(x)),
+        Spec("H", "consumer_control"),
+    ]
+    type: Button.Type = attr.ib()
+    consumer_control: int = attr.ib()
+    hidtype: Button.HidType = attr.ib(
+        init=False, default=Button.HidType.CONSUMER_CONTROL
+    )
+
+
+@attr.s
+class ButtonSpecial(Button):
+    specs = [
+        Spec("B", "type", convert_from_data=lambda x: Button.Type(x)),
+        Spec("B", "special"),
+        Spec("B", "__reserved"),  # ignored
+        Spec("B", "profile"),
+    ]
+    type: Button.Type = attr.ib()
+    special: int = attr.ib()
+    profile: int = attr.ib()
+
+    @property
+    def ratbag_special(self) -> ratbag.ActionSpecial.Special:
+        mapping = {
+            0x01: ratbag.ActionSpecial.Special.WHEEL_LEFT,
+            0x02: ratbag.ActionSpecial.Special.WHEEL_RIGHT,
+            0x03: ratbag.ActionSpecial.Special.RESOLUTION_UP,
+            0x04: ratbag.ActionSpecial.Special.RESOLUTION_DOWN,
+            0x05: ratbag.ActionSpecial.Special.RESOLUTION_CYCLE_UP,
+            0x06: ratbag.ActionSpecial.Special.RESOLUTION_DEFAULT,
+            0x07: ratbag.ActionSpecial.Special.RESOLUTION_ALTERNATE,
+            0x08: ratbag.ActionSpecial.Special.PROFILE_UP,
+            0x09: ratbag.ActionSpecial.Special.PROFILE_DOWN,
+            0x0A: ratbag.ActionSpecial.Special.PROFILE_CYCLE_UP,
+            0x0B: ratbag.ActionSpecial.Special.SECOND_MODE,
+        }
+        try:
+            return mapping[self.special]
+        except KeyError:
+            return ratbag.ActionSpecial.Special.UNKNOWN
+
+
+@attr.s
+class ButtonMacro(Button):
+    specs = [
+        Spec("B", "type", convert_from_data=lambda x: Button.Type(x)),
+        Spec("B", "page"),
+        Spec("B", "zero"),
+        Spec("B", "offset"),
+    ]
+    page: int = attr.ib()
+    zero: int = attr.ib()
+    offset: int = attr.ib()
+    type: Button.Type = attr.ib(init=False, default=Button.Type.MACRO)
+
+
+@attr.s
+class ButtonDisabled(Button):
+    specs = [
+        Spec("B", "type", convert_from_data=lambda x: Button.Type(x)),
+    ]
 
 
 @attr.s
@@ -304,69 +524,162 @@ class Led(object):
                 Led.Mode.BREATHING: ratbag.Led.Mode.BREATHING,
                 Led.Mode.RIPPLE: ratbag.Led.Mode.BREATHING,
                 Led.Mode.CUSTOM: ratbag.Led.Mode.BREATHING,
-            }[self]
+            }.get(
+                self, ratbag.Led.Mode.ON
+            )  # unhandled mode is just ON
 
-    mode: "Led.Mode" = attr.ib(default=Mode.OFF)
-    color: Tuple[int, int, int] = attr.ib(default=(0, 0, 0))
-    brightness: int = attr.ib(default=255)
-    period: int = attr.ib(default=0)
+        @staticmethod
+        def get_class(mode: "Led.Mode") -> Type["Led"]:
+            """
+            Map the :class:`Led.Mode` into the actual class expected to handle
+            that particular mode.
+            """
+            return {
+                Led.Mode.OFF: LedOff,
+                Led.Mode.ON: LedOn,
+                Led.Mode.CYCLE: LedCycle,
+                Led.Mode.COLOR_WAVE: LedColorWave,
+                Led.Mode.STARLIGHT: LedStarlight,
+                Led.Mode.BREATHING: LedBreathing,
+                Led.Mode.RIPPLE: LedRipple,
+                Led.Mode.CUSTOM: LedCustom,
+            }[mode]
 
-    @classmethod
-    def from_data(cls, data: bytes) -> "Led":
+        @staticmethod
+        def from_obj(obj: "Led") -> int:
+            """
+            Map the Led subclass into the :class:`Led.Mode` it corresponds to.
+            """
+            mapping = {
+                LedOff: Led.Mode.OFF,
+                LedOn: Led.Mode.ON,
+                LedCycle: Led.Mode.CYCLE,
+                LedColorWave: Led.Mode.COLOR_WAVE,
+                LedStarlight: Led.Mode.STARLIGHT,
+                LedBreathing: Led.Mode.BREATHING,
+                LedRipple: Led.Mode.RIPPLE,
+                LedCustom: Led.Mode.CUSTOM,
+            }
+            return next(iter({v for k, v in mapping.items() if isinstance(obj, k)}))
+
+    mode: Mode = attr.ib()
+
+    @staticmethod
+    def from_data(data: bytes) -> "Led":
         # input data are 11 bytes for this LED, first byte is the mode
+        # We have a mapping of mode to class type, then instantiate that with
+        # the class-specific parser spec
         mode = Led.Mode(data[0])
+        cls: Type = Led.Mode.get_class(mode)
+        result = Parser.to_object(bytes(data), cls.specs, result_class=cls)
+        return result.object
 
-        def intensity(x):
-            return x if x else 100  # 1-100 percent, 0 means 100
+    @mode.validator
+    def mode_validator(self, attribute, value):
+        if value != Led.Mode.from_obj(self):
+            raise ValueError(f"Invalid mode {value} for {type(self)}")
 
-        mapping: Dict["Led.Mode", List[Spec]] = {
-            Led.Mode.OFF: [],
-            Led.Mode.ON: [Spec("BBB", "colors")],
-            Led.Mode.CYCLE: [
-                Spec("BBBBB", "_"),
-                Spec("H", "period"),
-                Spec(
-                    "B",
-                    "intensity",
-                    convert_from_data=intensity,
-                ),  # 1-100 percent, 0 means 100
-            ],
-            Led.Mode.COLOR_WAVE: [],  # dunno
-            Led.Mode.STARLIGHT: [
-                Spec("BBB", "color_sky"),
-                Spec("BBB", "color_star"),
-            ],
-            Led.Mode.BREATHING: [
-                Spec("BBB", "color"),
-                Spec("H", "period"),
-                Spec("B", "waveform"),
-                Spec(
-                    "B",
-                    "intensity",
-                    convert_from_data=intensity,
-                ),  # 1-100 percent, 0 means 100
-            ],
-            Led.Mode.RIPPLE: [
-                Spec("BBB", "color"),
-                Spec("B", "_"),
-                Spec("H", "period"),
-            ],
-            Led.Mode.CUSTOM: [],  # dunno
-        }
 
-        specs = [
-            Spec(
-                "B",
-                "mode",
-                convert_from_data=lambda m: Led.Mode(m),
-            )
-        ] + mapping[mode]
+@attr.s
+class LedOn(Led):
+    specs = [
+        Spec("B", "mode", convert_from_data=lambda x: Led.Mode(x)),
+        Spec("BBB", "color", convert_from_data=lambda x: Color(*x)),
+    ]
+    mode: Led.Mode = attr.ib()
+    color: Color = attr.ib()
 
-        result = Parser.to_object(bytes(data), specs)
-        led = cls(mode=result.object.mode)
-        for name in [s.name for s in specs]:
-            setattr(led, name, getattr(result.object, name))
-        return led
+    @mode.validator
+    def mode_validator(self, attribute, value):
+        if value != Led.Mode.ON:
+            raise ValueError(f"Invalid mode {value} for LedOn")
+
+
+@attr.s
+class LedOff(Led):
+    specs = [
+        Spec("B", "mode", convert_from_data=lambda x: Led.Mode(x)),
+    ]
+    mode: Led.Mode = attr.ib()
+
+
+@attr.s
+class LedCustom(Led):
+    specs = [
+        Spec("B", "mode", convert_from_data=lambda x: Led.Mode(x)),
+    ]
+    mode: Led.Mode = attr.ib()
+
+
+@attr.s
+class LedCycle(Led):
+    specs = [
+        Spec("B", "mode", convert_from_data=lambda x: Led.Mode(x)),
+        Spec("BBBBB", "_"),
+        Spec("H", "period"),
+        Spec(
+            "B",
+            "intensity",
+            convert_from_data=lambda x: x if x else 100,  # 1-100 percent, 0 means 100
+        ),
+    ]
+    mode: Led.Mode = attr.ib()
+    period: int = attr.ib(default=0)
+    intensity: int = attr.ib(default=0)
+
+
+@attr.s
+class LedBreathing(Led):
+    specs = [
+        Spec("B", "mode", convert_from_data=lambda x: Led.Mode(x)),
+        Spec("BBB", "color", convert_from_data=lambda x: Color(*x)),
+        Spec("H", "period"),
+        Spec("B", "waveform"),
+        Spec(
+            "B",
+            "intensity",
+            convert_from_data=lambda x: x if x else 100,  # 1-100 percent, 0 means 100
+        ),
+    ]
+    mode: Led.Mode = attr.ib()
+    color: Color = attr.ib()
+    period: int = attr.ib()
+    waveform: int = attr.ib()
+    intensity: int = attr.ib()
+
+
+@attr.s
+class LedColorWave(Led):
+    specs = [
+        Spec("B", "mode", convert_from_data=lambda x: Led.Mode(x)),
+    ]
+    mode: Led.Mode = attr.ib()
+    # Unclear what other fields are
+
+
+@attr.s
+class LedStarlight(Led):
+    specs = [
+        Spec("B", "mode", convert_from_data=lambda x: Led.Mode(x)),
+        Spec("BBB", "color_sky", convert_from_data=lambda x: Color(*x)),
+        Spec("BBB", "color_star", convert_from_data=lambda x: Color(*x)),
+    ]
+    mode: Led.Mode = attr.ib()
+    color_sky: Color = attr.ib()
+    color_star: Color = attr.ib()
+
+
+@attr.s
+class LedRipple(Led):
+    specs = [
+        Spec("B", "mode", convert_from_data=lambda x: Led.Mode(x)),
+        Spec("BBB", "color", convert_from_data=lambda x: Color(*x)),
+        Spec("B", "_"),
+        Spec("H", "period"),
+    ]
+    mode: Led.Mode = attr.ib()
+    color: Color = attr.ib()
+    period: int = attr.ib()
 
 
 class Hidpp20Device(GObject.Object):
@@ -412,6 +725,7 @@ class Hidpp20Device(GObject.Object):
         return self.hidraw_device.path
 
     def start(self) -> None:
+        # We require both the Long and Short report IDs for this driver
         supported = [
             id for id in self.hidraw_device.report_ids["input"] if id in tuple(ReportID)
         ]
@@ -424,8 +738,13 @@ class Hidpp20Device(GObject.Object):
 
         self.supported_requests = supported
 
+        # Detect protocol version - merely for logging, we don't do anything
+        # with it but it's a good first check to fail at.
         self._detect_protocol_version()
-        features = self._find_features()
+        # Find the features supported by this device (and this driver). The
+        # only one we *really* require is the onboard profiles, we don't
+        # bother with devices that don't have profiles
+        features: Dict[FeatureName, Feature] = self._find_features()
         required_features = (FeatureName.ONBOARD_PROFILES,)
         missing_features = [f for f in required_features if f not in features]
         if missing_features:
@@ -433,13 +752,57 @@ class Hidpp20Device(GObject.Object):
                 self.hidraw_device, f"HID++2.0 feature {missing_features}"
             )
 
+        # Firmware version is exported to the ratbag device
         self.firmware_version = self._detect_firmware_version(features)
-        self._init_profiles(features)
+
+        # If we get here, we have profiles. Query for the various memory
+        # formats first so we know what we're parsing here
+        desc_query = QueryOnboardProfilesDesc.instance(features).run(self)
+        logger.debug(desc_query)
+
+        if desc_query.reply.memory_model_id != OnboardProfile.MemoryType.G402:
+            raise ratbag.driver.SomethingIsMissingError.from_rodent(
+                self.hidraw_device,
+                f"Unsupported memory model {desc_query.reply.memory_model_id}",
+            )
+        if desc_query.reply.macro_format_id != OnboardProfile.MacroType.G402:
+            raise ratbag.driver.SomethingIsMissingError.from_rodent(
+                self.hidraw_device,
+                f"Unsupported macro format {desc_query.reply.macro_format_id}",
+            )
+        try:
+            OnboardProfile.ProfileType(desc_query.reply.profile_format_id)
+        except ValueError:
+            raise ratbag.driver.SomethingIsMissingError.from_rodent(
+                self.hidraw_device,
+                f"Unsupported profile format {desc_query.reply.profile_format_id}",
+            )
+
+        # Check if the device uses onboard memory or software memories
+        mode_query = QueryOnboardProfilesGetMode.instance(features).run(self)
+        logger.debug(mode_query)
+        if mode_query.reply.mode != OnboardProfile.Mode.ONBOARD:
+            raise ratbag.driver.SomethingIsMissingError.from_rodent(
+                self.hidraw_device,
+                f"Device not in Onboard mode ({mode_query.reply.mode})",
+            )
+            # FIXME: set the device to onboard mode here instead of throwing
+            # an exception
+
+        # if we get here, our device *should* be supported. Let's parse the
+        # profiles on the device!
+        self._init_profiles(
+            features,
+            sector_size=desc_query.reply.sector_size,
+            profile_count=desc_query.reply.profile_count,
+        )
 
     def _detect_protocol_version(self) -> Tuple[int, int]:
         # Get the protocol version and our feature set
         version = QueryProtocolVersion.instance().run(self)
         logger.debug(f"protocol version {version.reply.major}.{version.reply.minor}")
+        # If this happens that's a driver misconfiguration, should be using
+        # the hidpp10 driver instead
         if version.reply.major < 2:
             raise ratbag.driver.SomethingIsMissingError.from_rodent(
                 self.hidraw_device, "Protocol version 2.x"
@@ -477,39 +840,11 @@ class Hidpp20Device(GObject.Object):
                 pass
         return {f.name: f for f in features}
 
-    def _init_profiles(self, features: Dict[FeatureName, Feature]) -> None:
-        desc_query = QueryOnboardProfilesDesc.instance(features).run(self)
-        logger.debug(desc_query)
-        if desc_query.reply.memory_model_id != OnboardProfile.MemoryType.G402:
-            raise ratbag.driver.SomethingIsMissingError.from_rodent(
-                self.hidraw_device,
-                f"Unsupported memory model {desc_query.memory_model_id}",
-            )
-        if desc_query.reply.macro_format_id != OnboardProfile.MacroType.G402:
-            raise ratbag.driver.SomethingIsMissingError.from_rodent(
-                self.hidraw_device,
-                f"Unsupported macro format {desc_query.macro_format_id}",
-            )
-        try:
-            OnboardProfile.ProfileType(desc_query.reply.profile_format_id)
-        except ValueError:
-            raise ratbag.driver.SomethingIsMissingError.from_rodent(
-                self.hidraw_device,
-                f"Unsupported profile format {desc_query.profile_format_id}",
-            )
-
-        sector_size = desc_query.reply.sector_size
-
-        mode_query = QueryOnboardProfilesGetMode.instance(features).run(self)
-        logger.debug(mode_query)
-        if mode_query.reply.mode != OnboardProfile.Mode.ONBOARD:
-            raise ratbag.driver.SomethingIsMissingError.from_rodent(
-                self.hidraw_device,
-                f"Device not in Onboard mode ({mode_query.reply.mode})",
-            )
-            # FIXME: set the device to onboard mode here instead of throwing
-            # an exception
-
+    def _init_profiles(
+        self, features: Dict[FeatureName, Feature], sector_size: int, profile_count: int
+    ) -> None:
+        # Read the first sector, that has the addresses for the actual
+        # profiles.
         mem_query = QueryOnboardProfilesMemReadSector.instance(
             features,
             OnboardProfile.Sector.USER_PROFILES_G402,
@@ -521,6 +856,12 @@ class Hidpp20Device(GObject.Object):
                 self.hidraw_device, "Invalid checksum for onboard profiles"
             )
 
+        profile_addresses = [
+            ProfileAddress.from_sector(mem_query.data, idx)
+            for idx in range(profile_count)
+        ]
+
+        # Do we have multiple report rates that we can select?
         # Enough to run this once per device, doesn't need to be per profile
         if FeatureName.ADJUSTIBLE_REPORT_RATE in features:
             rates_query = QueryAdjustibleReportRateGetList.instance(features).run(self)
@@ -528,6 +869,7 @@ class Hidpp20Device(GObject.Object):
         else:
             report_rates = []
 
+        # Do we have the special keys feature?
         # Enough to run this once per device, doesn't need to be per profile
         if FeatureName.SPECIAL_KEYS_BUTTONS in features:
             count_query = QuerySpecialKeyButtonsGetCount.instance(features).run(self)
@@ -545,53 +887,64 @@ class Hidpp20Device(GObject.Object):
 
         # Profiles are stored in the various sectors, we need to read out each
         # sector and then parse it from the bytes we have.
-        for idx in range(desc_query.reply.profile_count):
-            profile_address = ProfileAddress.from_sector(mem_query.data, idx)
-            if not profile_address:
-                continue
+        for profile_address in profile_addresses:
+            if profile_address:
+                profile = self._init_profile(
+                    features, profile_address, sector_size=sector_size
+                )
+                profile.report_rates = report_rates
+                logger.debug(profile)
+                self.profiles.append(profile)
 
-            profile_query = QueryOnboardProfilesMemReadSector.instance(
-                features, profile_address.address, sector_size=sector_size
-            ).run(self)
-            logger.debug(profile_query)
-            if profile_query.checksum != crc(profile_query.data):
-                # FIXME: libratbag reads the ROM instead in this case
-                logger.error(f"CRC validation failed for profile {idx}")
-                continue
+    def _init_profile(
+        self, features, profile_address: ProfileAddress, sector_size: int
+    ):
+        # First sector on the device told us the address of the profile we
+        # want, w can read that sector now.
+        profile_query = QueryOnboardProfilesMemReadSector.instance(
+            features,
+            profile_address.address,
+            sector_size=sector_size,
+        ).run(self)
+        logger.debug(profile_query)
+        if profile_query.checksum != crc(profile_query.data):
+            # FIXME: libratbag reads the ROM instead in this case
+            logger.error(f"CRC validation failed for profile {profile_address.index}")
+            return
 
-            if FeatureName.ADJUSTIBLE_DPI in features:
-                scount_query = QueryAdjustibleDpiGetCount.instance(features).run(self)
-                # FIXME: there's a G602 quirk for the two queries in
-                # libratbag
-                for idx in range(scount_query.reply.sensor_count):
-                    dpi_list_query = QueryAdjustibleDpiGetDpiList.instance(
-                        features, idx
-                    ).run(self)
-                    logger.debug(dpi_list_query)
-                    if dpi_list_query.reply.dpi_steps:
-                        steps = dpi_list_query.reply.dpi_steps
-                        dpi_min = min(dpi_list_query.reply.dpis)
-                        dpi_max = max(dpi_list_query.reply.dpis)
-                        dpi_list = list(range(dpi_min, dpi_max + 1, steps))
-                    else:
-                        dpi_list = dpi_list_query.reply.dpis
+        # If we have adjustible DPI, get the list of DPIs. That can be
+        # either a fixed list or a min/max value with steps for us to
+        # generate the list ourselves.
+        if FeatureName.ADJUSTIBLE_DPI in features:
+            scount_query = QueryAdjustibleDpiGetCount.instance(features).run(self)
+            # FIXME: there's a G602 quirk for the two queries in
+            # libratbag
+            for idx in range(scount_query.reply.sensor_count):
+                dpi_list_query = QueryAdjustibleDpiGetDpiList.instance(
+                    features, idx
+                ).run(self)
+                logger.debug(dpi_list_query)
+                if dpi_list_query.reply.dpi_steps:
+                    steps = dpi_list_query.reply.dpi_steps
+                    dpi_min = min(dpi_list_query.reply.dpis)
+                    dpi_max = max(dpi_list_query.reply.dpis)
+                    dpi_list = list(range(dpi_min, dpi_max + 1, steps))
+                else:
+                    dpi_list = dpi_list_query.reply.dpis
 
-                    dpi_query = QueryAdjustibleDpiGetDpi.instance(features, idx).run(
-                        self
-                    )
-                    logger.debug(dpi_query)
-            else:
-                dpi_list = []
+                dpi_query = QueryAdjustibleDpiGetDpi.instance(features, idx).run(self)
+                logger.debug(dpi_query)
+        else:
+            dpi_list = []
 
-            profile = Profile.from_data(
-                address=profile_address.address,
-                enabled=profile_address.enabled,
-                data=profile_query.data,
-            )
-            profile.dpi_list = dpi_list
-            profile.report_rates = report_rates
-            logger.debug(profile)
-            self.profiles.append(profile)
+        profile = Profile.from_data(
+            address=profile_address.address,
+            enabled=profile_address.enabled,
+            data=profile_query.data,
+        )
+        profile.dpi_list = dpi_list
+        # report_rate is set in the caller
+        return profile
 
     def send(self, bytes: bytes) -> None:
         """
@@ -653,7 +1006,7 @@ class Hidpp20Driver(ratbag.driver.HidrawDriver):
         device = Hidpp20Device(rodent, index)
 
         device.start()
-        ratbag_device = ratbag.Device(
+        ratbag_device = ratbag.Device.create(
             self,
             path=device.path,
             name=device.name,
@@ -664,9 +1017,9 @@ class Hidpp20Driver(ratbag.driver.HidrawDriver):
         # Device start was successful if no exception occurs. Now fill in the
         # ratbag device.
         for idx, profile in enumerate(device.profiles):
-            p = ratbag.Profile(
-                ratbag_device,
-                idx,
+            p = ratbag.Profile.create(
+                device=ratbag_device,
+                index=idx,
                 name=profile.name,
                 report_rate=profile.report_rate,
                 report_rates=profile.report_rates,
@@ -674,7 +1027,9 @@ class Hidpp20Driver(ratbag.driver.HidrawDriver):
             )
 
             for dpi_idx, dpi in enumerate(profile.dpi):
-                ratbag.Resolution(p, dpi_idx, (dpi, dpi), dpi_list=profile.dpi_list)
+                ratbag.Resolution.create(
+                    profile=p, index=dpi_idx, dpi=(dpi, dpi), dpi_list=profile.dpi_list
+                )
 
             for led_idx, led in enumerate(profile.leds):
                 kwargs = {
@@ -683,7 +1038,7 @@ class Hidpp20Driver(ratbag.driver.HidrawDriver):
                     "colordepth": ratbag.Led.Colordepth.RGB_888,  # FIXME
                 }
                 if led.mode == Led.Mode.ON:
-                    kwargs["color"] = led.color
+                    kwargs["color"] = tuple(led.color)
                     kwargs["brightness"] = 100
                 elif led.mode == Led.Mode.OFF:
                     pass
@@ -691,14 +1046,41 @@ class Hidpp20Driver(ratbag.driver.HidrawDriver):
                     kwargs["effect_duration"] = led.period
                     kwargs["brightness"] = led.intensity
                 elif led.mode == Led.Mode.BREATHING:
-                    kwargs["color"] = led.color
+                    kwargs["color"] = tuple(led.color)
                     kwargs["brightness"] = led.intensity
                     kwargs["effect_duration"] = led.period
                 else:
-                    # FIXME: we need an unknown mode here
+                    # should never happen anyway, see to_ratbag_mode
                     pass
 
-                ratbag.Led(p, led_idx, **kwargs)
+                ratbag.Led.create(profile=p, index=led_idx, **kwargs)
+
+            for btn_idx, button in enumerate(profile.buttons):
+                actiontypes = (
+                    ratbag.Action.Type.NONE,
+                    ratbag.Action.Type.BUTTON,
+                    ratbag.Action.Type.SPECIAL,
+                    ratbag.Action.Type.MACRO,
+                )
+                b = ratbag.Button.create(
+                    profile=p, index=btn_idx, types=actiontypes, action=None
+                )
+                if button.type == Button.Type.DISABLED:
+                    action = ratbag.ActionNone.create()
+                elif button.type == Button.Type.HID:
+                    if button.hidtype == Button.HidType.MOUSE:
+                        action = ratbag.ActionButton.create(button=button.button)
+                    else:
+                        # FIXME: macro for keybaoard, special for consumer
+                        # control
+                        action = ratbag.ActionNone.create()
+                elif button.type == Button.Type.SPECIAL:
+                    action = ratbag.ActionSpecial.create(special=button.ratbag_special)
+                elif button.type == Button.Type.MACRO:
+                    # FIXME: needs parsing
+                    action = ratbag.ActionMacro.create()
+
+                b.set_action(action)
 
         self.emit("device-added", ratbag_device)
 
@@ -869,9 +1251,11 @@ class QueryProtocolVersion(Query):
 @attr.s
 class QueryGetFeature(Query):
     """
-    Query the device for the available feature set. The reply contains the
-    ``feature`` which can be used to query more information about this
-    feature.
+    Query the device for the given feature by name, see :class:`FeatureName`.
+    If successful, the reply ``feature`` attribute (:class:`Feature`) which
+    contains the index and feature type. The index is to be used to query
+    more information about this feature, see :class:`QueryFeatureSetCount`
+    and :class:`QueryFeatureSetId`.
     """
 
     feature_name: FeatureName = attr.ib()
@@ -899,6 +1283,7 @@ class QueryGetFeature(Query):
                 name=self.feature_name,
                 index=reply.feature_index,
                 type=reply.feature_type,
+                version=reply.feature_version,
             )
 
     def __str__(self):
@@ -937,7 +1322,7 @@ class QueryFeatureSetCount(Query):
     def parse_reply(self, reply):
         # feature set count does not include the root feature as documented
         # here:
-        # https://6xq.net/git/lars/lshidpp.git/plain/doc/logitech_hidpp_2.0_specificati
+        # https://6xq.net/git/lars/lshidpp.git/plain/doc/logitech_hidpp_2.0_specification_draft_2012-06-04.pdf
         if self.feature == FeatureName.FEATURE_SET:
             reply.count += 1
 
@@ -1153,7 +1538,7 @@ class QueryOnboardProfilesMemRead(Query):
                 Spec("H", "sector"),
                 Spec("H", "offset"),
             ],
-            reply_spec=[Spec("B", "data", repeat=16)],
+            reply_spec=[Spec("B" * 16, "data")],
             sector=sector,
             offset=offset,
         )

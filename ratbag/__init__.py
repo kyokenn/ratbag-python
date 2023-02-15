@@ -20,6 +20,7 @@ import ratbag.util
 logger = logging.getLogger(__name__)
 
 
+@attr.s
 class ConfigError(Exception):
     """
     Error indicating that the caller has tried to set the device's
@@ -27,16 +28,13 @@ class ConfigError(Exception):
 
     This error is recoverable by re-reading the device's current state and
     attempting a different configuration.
-
-    .. attribute:: message
-
-        The error message
     """
 
-    def __init__(self, message: str):
-        self.message = message
+    message: str = attr.ib()
+    """The error message to display"""
 
 
+@attr.s
 class Ratbag(GObject.Object):
     """
     An instance managing one or more ratbag devices. This is the entry point
@@ -64,6 +62,33 @@ class Ratbag(GObject.Object):
 
     """
 
+    _devices: List["Device"] = attr.ib(init=False, default=attr.Factory(list))
+    _blackbox: Optional["Blackbox"] = attr.ib(default=None)
+
+    def __attrs_pre_init__(self):
+        GObject.Object.__init__(self)
+
+    @classmethod
+    def create_empty(cls, /, blackbox: Optional["Blackbox"]) -> "Ratbag":
+        """
+        Create an "empty" instance of ratbag that does not load any drivers
+        and thus will not detect devices. The caller is responsible for
+        adding drivers.
+
+        This is used for testing only, use :meth:`Ratbag.create` instead.
+        """
+        r = cls(blackbox=blackbox)
+        return r
+
+    @classmethod
+    def create(cls, /, blackbox: Optional["Blackbox"] = None) -> "Ratbag":
+        """
+        Create a new Ratbag instance.
+        """
+        r = cls(blackbox=blackbox)
+        r._load_data_files()
+        return r
+
     @GObject.Signal(name="start")
     def _start(self, *args):
         """
@@ -78,13 +103,6 @@ class Ratbag(GObject.Object):
         GObject signal emitted when a new :class:`ratbag.Device` was added
         """
         pass
-
-    def __init__(self, /, load_data_files=True, blackbox: Optional["Blackbox"] = None):
-        super().__init__()
-        self._devices: List[Device] = []
-        self._blackbox = blackbox
-        if load_data_files:
-            self._load_data_files()
 
     def _load_data_files(self):
         """
@@ -104,17 +122,18 @@ class Ratbag(GObject.Object):
         datafiles = ratbag.util.load_data_files()
 
         # drivers want the list of all entries passed as one, so we need to
-        # extract them first, into a dict of "drivername" : [dev1, dev2, ...]
+        # extract them first, into a dict of
+        # "drivername" : [DeviceConfig(match1), DeviceConfig(match2), ...]
         drivers: Dict[str, List["ratbag.driver.DeviceConfig"]] = {}
         for f in datafiles:
-            for match in f.matches:
-                supported_devices = drivers.get(f.driver, [])
-                supported_devices.append(DeviceConfig(match, f.driver_options))
-                drivers[f.driver] = supported_devices
+            supported_devices = [
+                DeviceConfig(match, f.driver_options) for match in f.matches
+            ]
+            drivers[f.driver] = drivers.setdefault(f.driver, []) + supported_devices
 
-        for drivername, supported_devices in drivers.items():
+        for drivername, configs in drivers.items():
             try:
-                self.add_driver(drivername, supported_devices)
+                self.add_driver(drivername, configs)
             except ratbag.driver.DriverUnavailable as e:
                 logger.error(f"{e}")
 
@@ -158,22 +177,15 @@ class Ratbag(GObject.Object):
                 driver.connect("rodent-found", cb_rodent_found)
             except (AttributeError, TypeError) as e:
                 logger.warning(
-                    "Signal 'rodent-found' not available, cannot record: {e}"
+                    f"Signal 'rodent-found' not available, cannot record: {e}"
                 )
 
     def start(self) -> None:
         """
         Start the context. Before invoking this function ensure the caller has
-        connected to all the signal.
+        connected to all the signals.
         """
         self.emit("start")
-
-    @classmethod
-    def create(cls, /, load_data_files=True, blackbox: Optional["Blackbox"] = None):
-        """
-        Create a new Ratbagd instance.
-        """
-        return cls(load_data_files=load_data_files, blackbox=blackbox)
 
 
 @attr.s
@@ -195,13 +207,7 @@ class Blackbox:
 
     @directory.default
     def _directory_default(self):
-        import os
-        from datetime.datetime import now
-
-        ts = now.strftime("%Y-%m-%d-%H:%M:%S")
-        fallback = Path.home() / ".state"
-        statedir = os.environ.get("XDG_STATE_HOME", fallback)
-        return statedir / "ratbag" / "recordings" / ts
+        return Blackbox.default_recordings_directory()
 
     def add_recorder(self, recorder: "Recorder"):
         if not self._recorders and not self.directory.exists():
@@ -216,7 +222,25 @@ class Blackbox:
         """
         return self.directory / filename
 
+    @classmethod
+    def create(cls, directory: Optional[Path]) -> "Blackbox":
+        kwargs = {}
+        if directory:
+            kwargs["directory"] = directory
+        return cls(**kwargs)
 
+    @staticmethod
+    def default_recordings_directory():
+        import os
+        import datetime
+
+        ts = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+        fallback = Path.home() / ".state"
+        statedir = os.environ.get("XDG_STATE_HOME", fallback)
+        return statedir / "ratbag" / "recordings" / ts
+
+
+@attr.s
 class Recorder(GObject.Object):
     """
     Recorder can be added to a :class:`ratbag.Driver` to log data between the
@@ -225,7 +249,7 @@ class Recorder(GObject.Object):
     :param config: A dictionary with logger-specific data to initialize
     """
 
-    def __init__(self, config: Dict[str, Any] = {}):
+    def __attrs_pre_init__(self):
         GObject.Object.__init__(self)
 
     def log_rx(self, data: bytes) -> None:
@@ -241,16 +265,43 @@ class Recorder(GObject.Object):
         pass
 
 
+@attr.s
 class CommitTransaction(GObject.Object):
     """
     A helper object for :meth:`Device.commit`. This object keeps track of a
     current commit transaction and emits the ``finished`` signal once the
     driver has completed the transaction.
 
+        >>> device = None  # should be a device though...
+        >>> t = CommitTransaction.create(device)
+        >>> def on_finished(transaction):
+        ...     print(f"Device {transaction.device} is done")
+        >>> signal_number = t.connect("finished", on_finished)
+        >>> t.commit()  # doctest: +SKIP
+
     A transaction object can only be used once.
     """
 
-    _seqno_gen = count()
+    class State(enum.IntEnum):
+        NEW = enum.auto()
+        IN_USE = enum.auto()
+        FAILED = enum.auto()
+        SUCCESS = enum.auto()
+
+    _device: "ratbag.Device" = attr.ib()
+    _seqno: int = attr.ib(init=False, factory=lambda c=count(): next(c))  # type: ignore
+
+    """
+    Unique serial number for this transaction
+    """
+    _state: State = attr.ib(init=False, default=State.NEW)
+
+    def __attrs_pre_init__(self):
+        GObject.Object.__init__(self)
+
+    @classmethod
+    def create(cls, device: "Device") -> "CommitTransaction":
+        return cls(device=device)
 
     @GObject.Signal()
     def finished(self, *args):
@@ -258,12 +309,6 @@ class CommitTransaction(GObject.Object):
         GObject signal sent when the transaction is complete.
         """
         pass
-
-    def __init__(self):
-        GObject.Object.__init__(self)
-        self._seqno = next(self._seqno_gen)
-        self._used = False
-        self._done = False
 
     @property
     def seqno(self) -> int:
@@ -279,45 +324,52 @@ class CommitTransaction(GObject.Object):
         True if the transaction has been used in :meth:`Device.commit` (even
         if the transaction is not yet complete).
         """
-        return self._used
+        return self._state != CommitTransaction.State.NEW
 
     @property
     def device(self) -> "ratbag.Device":
         """
-        The device assigned to this transaction. This property is not
-        available until the transaction is used.
+        The device assigned to this transaction.
         """
         return self._device
 
     @property
     def success(self) -> bool:
         """
-        Returns ``True`` on success. This property is not available unless the
+        Returns ``True`` on success. This property is ``False`` until the
         transaction is complete.
         """
-        return self._success
+        return self._state == CommitTransaction.State.SUCCESS
 
     @property
     def is_finished(self) -> bool:
-        return self._done
+        return self._state in [
+            CommitTransaction.State.SUCCESS,
+            CommitTransaction.State.FAILED,
+        ]
 
-    def mark_as_in_use(self, device: "ratbag.Device"):
-        """
-        :meta private:
-        """
-        self._used = True
-        self._device = device
+    def commit(self):
+        assert self._state in [CommitTransaction.State.NEW]
+        self._state == CommitTransaction.State.IN_USE
+        self.device.commit(self)
 
     def complete(self, success: bool):
         """
         Complete this transaction with the given success status.
         """
-        if not self._done:
-            self._success = success
-            self._done = True
+        if self._state not in [
+            CommitTransaction.State.SUCCESS,
+            CommitTransaction.State.FAILED,
+        ]:
+            self._state = (
+                CommitTransaction.State.SUCCESS
+                if success
+                else CommitTransaction.State.FAILED
+            )
             self.emit("finished")
 
 
+@attr.s
 class Device(GObject.Object):
     """
     A device as exposed to Ratbag clients. A driver implementation must not
@@ -326,20 +378,6 @@ class Device(GObject.Object):
     :class:`ratbag.Driver`::``device-added`` signal until the device is
     finalized.
 
-    .. attribute:: name
-
-        The device name
-
-    .. attribute:: path
-
-        The path to the source device
-
-    .. attribute:: firmware_version
-
-        A device-specific string with the firmware version, or the empty
-        string. For devices with a major/minor or purely numeric firmware
-        version, the conversion into a string is implementation-defined.
-
     GObject Signals:
 
     - ``disconnected``: this device has been disconnected
@@ -347,6 +385,32 @@ class Device(GObject.Object):
       is used by drivers.
     - ``resync``: callers should re-sync the state of the device
     """
+
+    driver: "ratbag.driver.Driver" = attr.ib()
+    path: str = attr.ib()
+    name: str = attr.ib()
+    """The device name as advertised by the kernel"""
+    model: str = attr.ib(default="")
+    """The device model, a more precise identifier (where available)"""
+    firmware_version: str = attr.ib(default="")
+    """
+    A device-specific string with the firmware version, or the empty
+    string. For devices with a major/minor or purely numeric firmware
+    version, the conversion into a string is implementation-defined.
+    """
+
+    _profiles: Tuple["Profile", ...] = attr.ib(init=False, default=attr.Factory(tuple))
+    _dirty: bool = attr.ib(init=False, default=False)
+
+    @classmethod
+    def create(cls, driver: "ratbag.driver.Driver", path: str, name: str, **kwargs):
+        permitted = ["firmware_version", "model"]
+
+        filtered = {k: v for k, v in kwargs.items() if k in permitted}
+        if filtered.keys() != kwargs.keys():
+            logger.error(f"BUG: filtered kwargs down to {filtered}")
+
+        return cls(driver=driver, path=path, name=name, **filtered)
 
     @GObject.Signal()
     def disconnected(self, *args):
@@ -376,23 +440,8 @@ class Device(GObject.Object):
         """
         pass
 
-    def __init__(
-        self,
-        driver: "ratbag.driver.Driver",
-        path: str,
-        name: str,
-        model: str,
-        firmware_version: str = "",
-    ):
+    def __attrs_pre_init__(self):
         GObject.Object.__init__(self)
-        self.driver = driver
-        self.path = path
-        self.name = name
-        self.model = model
-        self.firmware_version = firmware_version
-        self._profiles: Tuple[Profile, ...] = tuple()
-        self._driver = driver
-        self._dirty = False
 
     @property
     def profiles(self) -> Tuple["ratbag.Profile", ...]:
@@ -404,17 +453,21 @@ class Device(GObject.Object):
         # modify it.
         return self._profiles
 
-    def commit(self, transaction: Optional[CommitTransaction] = None):
+    def commit(self, transaction: CommitTransaction):
         """
         Write the current changes to the driver. This is an asynchronous
         operation (maybe in a separate thread). Once complete, the
         given transaction object will emit the ``finished`` signal.
 
-            >>> t = CommitTransaction()
+        You should not call this function directly, use
+        :meth:`CommitTransaction.commit` instead:
+
+            >>> device = None  # should be a device though...
+            >>> t = CommitTransaction.create(device)
             >>> def on_finished(transaction):
             ...     print(f"Device {transaction.device} is done")
             >>> signal_number = t.connect("finished", on_finished)
-            >>> device.commit(t)  # doctest: +SKIP
+            >>> t.commit()  # doctest: +SKIP
 
         The :attr:`dirty` status of the device's features is reset to
         ``False`` immediately before the callback is invoked but not before
@@ -431,12 +484,10 @@ class Device(GObject.Object):
 
         :returns: a sequence number for this transaction
         """
-        if transaction is None:
-            transaction = CommitTransaction()
-        elif transaction.used:
+        assert transaction is not None
+        assert transaction.device == self
+        if transaction.is_finished:
             raise ValueError("Transactions cannot be re-used")
-
-        transaction.mark_as_in_use(self)
 
         GLib.idle_add(self._cb_idle_commit, transaction)
 
@@ -509,28 +560,33 @@ class Device(GObject.Object):
         }
 
 
+@attr.s
 class Feature(GObject.Object):
     """
     Base class for all device features, including profiles. This is a
     convenience class only to avoid re-implementation of common properties.
-
-    :param device: the device this feature belongs to
-    :param index: the 0-based feature index
-
-    .. attribute:: device
-
-        The device associated with this feature
     """
 
-    def __init__(self, device: ratbag.Device, index: int):
-        assert index >= 0
+    _device: "ratbag.Device" = attr.ib()
+    _index: int = attr.ib()
+    _dirty: bool = attr.ib(init=False, default=False)
+
+    @_index.validator
+    def index_validator(self, attribute, value):
+        if not isinstance(value, int) or value < 0:
+            raise ValueError("index must be >= 0")
+
+    def __attrs_pre_init__(self):
         GObject.Object.__init__(self)
-        self.device = device
-        self._index = index
-        self._dirty = False
+
+    def __attrs_post_init__(self):
         logger.debug(
             f"{self.device.name}: creating {type(self).__name__} with index {self.index}"
         )
+
+    @property
+    def device(self) -> ratbag.Device:
+        return self._device
 
     @property
     def index(self) -> int:
@@ -557,6 +613,7 @@ class Feature(GObject.Object):
             self.notify("dirty")
 
 
+@attr.s
 class Profile(Feature):
     """
     A profile on the device. A device must have at least one profile, the
@@ -566,10 +623,6 @@ class Profile(Feature):
     changes, the ``active`` signal is emitted for the previously
     active profile with a boolean false value, then the ``active`` signal is
     emitted on the newly active profile.
-
-    .. attribute:: name
-
-        The profile name (may be software-assigned)
 
     """
 
@@ -628,46 +681,35 @@ class Profile(Feature):
         The profile is persistent and cannot be deleted.
         """
 
-    def __init__(
-        self,
-        device,
-        index,
-        name=None,
-        capabilities=(),
-        report_rate=None,
-        report_rates=(),
-        active=False,
-        response=0,
-        responses=tuple(),
-        snapping=False,
-        distance=0,
-        sleep_timeout=0,
-        sleep_timeouts=tuple(),
-        battery_alert=0,
-    ):
-        super().__init__(device, index)
-        self.name = f"Unnamed {index}" if name is None else name
-        self._buttons = ()
-        self._resolutions = ()
-        self._leds = ()
-        self._default = False
-        self._active = active
-        self._enabled = True
-        self._report_rate = report_rate
-        self._report_rates = tuple(sorted(set(report_rates)))
-        self._capabilities = tuple(sorted(set(capabilities)))
-        self._response = response
-        self._responses = responses
-        self._snapping = snapping
-        self._distance = distance
-        self._sleep_timeout = sleep_timeout
-        self._sleep_timeouts = sleep_timeouts
-        self._battery_alert = battery_alert
+    name: str = attr.ib()
+    _report_rate: int = attr.ib(default=None)
+    _active: bool = attr.ib(default=False)
+    _enabled: bool = attr.ib(default=True)
+    _default: bool = attr.ib(default=False)
+    _capabilities: Tuple = attr.ib(default=attr.Factory(tuple))
+    _buttons: Tuple = attr.ib(default=attr.Factory(tuple))
+    _resolutions: Tuple = attr.ib(default=attr.Factory(tuple))
+    _leds: Tuple = attr.ib(default=attr.Factory(tuple))
+    _report_rates: Tuple = attr.ib(default=attr.Factory(tuple))
+    _response: int = attr.ib(default=None)
+    _responses: Tuple = attr.ib(default=attr.Factory(tuple))
+    _snapping: bool = attr.ib(default=False)
+    _distance: int = attr.ib(default=None)
+    _sleep_timeout: int = attr.ib(default=None)
+    _sleep_timeouts: Tuple = attr.ib(default=attr.Factory(tuple))
+    _battery_alert: int = attr.ib(default=None)
+
+
+    @name.default
+    def _name_default(self):
+        return f"Unnamed {self.index}"
+
+    def __attrs_post_init__(self):
         self.device._add_profile(self)
 
-    @GObject.Signal()
-    def on_activated(self, *args):
-        pass
+    @classmethod
+    def create(cls, device: ratbag.Device, index: int, **kwargs):
+        return cls(device=device, index=index, **kwargs)
 
     @property
     def buttons(self) -> Tuple["ratbag.Button", ...]:
@@ -914,6 +956,7 @@ class Profile(Feature):
         }
 
 
+@attr.s
 class Resolution(Feature):
     """
     A resolution within a profile. A device must have at least one profile, the
@@ -938,37 +981,58 @@ class Resolution(Feature):
         be a tuple of identical values.
         """
 
-    def __init__(
-        self,
-        profile: Profile,
-        index: int,
-        dpi: Tuple[int, int],
-        *,
-        enabled: bool = True,
-        capabilities: Tuple[Capability, ...] = (),
-        dpi_list: Tuple[int, ...] = (),
-    ):
-        try:
-            assert index >= 0
-            assert len(dpi) == 2, "dpi must be a tuple"
-            assert all([int(v) >= 0 for v in dpi]), "dpi must be positive"
-            assert all(
-                [int(v) > 0 for v in dpi_list]
-            ), "all in dpi_list must be positive"
-            assert all([x in Resolution.Capability for x in capabilities])
-            assert index not in profile.resolutions, "duplicate resolution index"
-        except (TypeError, ValueError) as e:
-            assert e is None
+    _profile: ratbag.Profile = attr.ib()
+    _dpi: Tuple[int, int] = attr.ib()
+    _active: bool = attr.ib(kw_only=True, default=False)
+    _enabled: bool = attr.ib(kw_only=True, default=True)
+    _default: bool = attr.ib(kw_only=True, default=False)
+    _capabilities: Tuple[Capability, ...] = attr.ib(
+        kw_only=True, default=attr.Factory(tuple)
+    )
+    _dpi_list: Tuple[int, ...] = attr.ib(kw_only=True, default=attr.Factory(tuple))
 
-        super().__init__(profile.device, index)
-        self.profile = profile
-        self._dpi = dpi
-        self._dpi_list = tuple(sorted(set(dpi_list)))
-        self._capabilities = tuple(set(capabilities))
-        self._active = False
-        self._default = False
-        self._enabled = enabled
-        self.profile._add_resolution(self)
+    def __attrs_post_init__(self):
+        self._profile._add_resolution(self)
+
+    @_dpi.validator
+    def _validate_dpi(self, attribute, value):
+        if not isinstance(value, tuple) or len(value) != 2:
+            raise ValueError("dpi must be a 2-sized tuple")
+
+        if not all([int(v) >= 0 for v in value]):
+            raise ValueError("dpi must be positive")
+
+    @_dpi_list.validator
+    def _validate_dpi_list(self, attribute, value):
+        try:
+            if not all([int(v) >= 0 for v in value]):
+                raise ValueError("dpi_list must be positive")
+        except Exception as e:
+            raise ValueError(f"Invalid dpi_list: {e}")
+
+    @_capabilities.validator
+    def _validate_capabilities(self, attribute, value):
+        try:
+            if not all([c in Resolution.Capability for c in value]):
+                raise ValueError("Unknown capability")
+        except Exception as e:
+            raise ValueError(f"Invalid capability: {e}")
+
+    @classmethod
+    def create(
+        cls, profile: ratbag.Profile, index: int, dpi: Tuple[int, int], **kwargs
+    ):
+        capabilities = kwargs.get("capabilities")
+        if capabilities:
+            kwargs["capabilities"] = ratbag.util.to_tuple(capabilities)
+        dpi_list = kwargs.get("dpi_list")
+        if dpi_list:
+            kwargs["dpi_list"] = ratbag.util.to_sorted_tuple(dpi_list)
+        return cls(profile.device, index, profile, dpi, **kwargs)
+
+    @property
+    def profile(self) -> ratbag.Profile:
+        return self._profile
 
     @property
     def capabilities(self) -> Tuple[Capability, ...]:
@@ -1089,7 +1153,12 @@ class Resolution(Feature):
         }
 
 
+@attr.s
 class Action(GObject.Object):
+    """
+    An "abstract" base class for all actions
+    """
+
     class Type(enum.IntEnum):
         NONE = 0
         BUTTON = 1
@@ -1098,42 +1167,50 @@ class Action(GObject.Object):
         MACRO = 4
         UNKNOWN = 1000
 
-    def __init__(self, parent):
+    _type: Type = attr.ib()
+
+    def __attrs_pre_init__(self):
         GObject.Object.__init__(self)
-        self._parent = parent
-        self._type = Action.Type.UNKNOWN
 
     @property
     def type(self) -> Type:
         return self._type
 
-    def __str__(self) -> str:
-        return "Unknown"
-
     def as_dict(self) -> Dict[str, Any]:
         return {"type": self.type.name}
 
-    def __eq__(self, other):
-        return type(self) == type(other)
 
-    def __ne__(self, other):
-        return not self == other
+@attr.s
+class ActionUnknown(Action):
+    """
+    A "none" action to signal the button is disabled and does not send an
+    event when physically presed down.
+    """
+
+    @classmethod
+    def create(cls) -> "ActionUnknown":
+        return cls(type=Action.Type.UNKNOWN)
+
+    def __str__(self) -> str:
+        return "Unknown"
 
 
+@attr.s
 class ActionNone(Action):
     """
     A "none" action to signal the button is disabled and does not send an
     event when physically presed down.
     """
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self._type: Action.Type = Action.Type.NONE
+    @classmethod
+    def create(cls) -> "ActionNone":
+        return cls(type=Action.Type.NONE)
 
     def __str__(self) -> str:
         return "None"
 
 
+@attr.s
 class ActionButton(Action):
     """
     A button action triggered by a button. This is the simplest case of an
@@ -1142,10 +1219,11 @@ class ActionButton(Action):
     at button 1 (left mouse button).
     """
 
-    def __init__(self, parent, button: int):
-        super().__init__(parent)
-        self._button = button
-        self._type = Action.Type.BUTTON
+    _button: int = attr.ib()
+
+    @classmethod
+    def create(cls, button: int) -> "ActionButton":
+        return cls(type=Action.Type.BUTTON, button=button)
 
     @property
     def button(self) -> int:
@@ -1167,6 +1245,7 @@ class ActionButton(Action):
         return type(self) == type(other) and self.button == other.button
 
 
+@attr.s
 class ActionKey(Action):
     def __init__(self, parent, key):
         super().__init__(parent)
@@ -1199,6 +1278,7 @@ class ActionKey(Action):
         return type(self) == type(other) and self.key == other.key
 
 
+@attr.s
 class ActionSpecial(Action):
     """
     A special action triggered by a button. These actions are fixed
@@ -1234,10 +1314,11 @@ class ActionSpecial(Action):
         SECOND_MODE = 0x40000011
         BATTERY_LEVEL = 0x40000012
 
-    def __init__(self, parent, special: Special):
-        super().__init__(parent)
-        self._type = Action.Type.SPECIAL
-        self._special = special
+    _special: Special = attr.ib()
+
+    @classmethod
+    def create(cls, special: Special):
+        return cls(type=Action.Type.SPECIAL, special=special)
 
     @property
     def special(self) -> Special:
@@ -1258,6 +1339,7 @@ class ActionSpecial(Action):
         return type(self) == type(other) and self.special == other.special
 
 
+@attr.s
 class ActionMacro(Action):
     """
     A macro assigned to a button. The macro may consist of key presses,
@@ -1272,16 +1354,17 @@ class ActionMacro(Action):
         KEY_RELEASE = 2
         WAIT_MS = 3
 
-    def __init__(
-        self,
-        parent,
-        name: str = "Unnamed macro",
-        events: List[Tuple[Event, int]] = [(Event.INVALID, 0)],
-    ):
-        super().__init__(parent)
-        self._type = Action.Type.MACRO
-        self._name = name
-        self._events = events
+    _name: str = attr.ib(default="Unnamed macro", eq=False)
+    _events: List[Tuple[Event, int]] = attr.ib()
+
+    @_events.default
+    def _events_default(self):
+        return [(ActionMacro.Event.INVALID, 0)]
+
+    @classmethod
+    def create(cls, events, name="Unamed macro"):
+        # FIXME: some validation would be good
+        return cls(type=Action.Type.MACRO, events=events, name=name)
 
     @property
     def name(self) -> str:
@@ -1333,6 +1416,7 @@ class ActionMacro(Action):
         )
 
 
+@attr.s
 class Button(Feature):
     """
     A physical button on the device as represented in a profile. A button has
@@ -1348,19 +1432,18 @@ class Button(Feature):
 
     """
 
-    def __init__(
-        self,
-        profile: ratbag.Profile,
-        index: int,
-        *,
-        types: Tuple[Action.Type] = (Action.Type.BUTTON,),
-        action: Optional[Action] = None,
-    ):
-        super().__init__(profile.device, index)
-        self.profile = profile
-        self._types = tuple(set(types))
-        self._action = action or Action(self)
-        self.profile._add_button(self)
+    _profile: ratbag.Profile = attr.ib()
+    _types: Tuple[Action.Type] = attr.ib(default=(Action.Type.BUTTON,))
+    _action: Action = attr.ib(default=ActionNone.create())
+
+    def __attrs_post_init__(self):
+        self._profile._add_button(self)
+
+    @classmethod
+    def create(cls, profile: ratbag.Profile, index: int, **kwargs):
+        if "types" in kwargs:
+            kwargs["types"] = ratbag.util.to_tuple(kwargs["types"])
+        return cls(profile.device, index, profile, **kwargs)
 
     @property
     def types(self) -> Tuple[Action.Type, ...]:
@@ -1402,6 +1485,7 @@ class Button(Feature):
         }
 
 
+@attr.s
 class Led(Feature):
     class Colordepth(enum.IntEnum):
         MONOCHROME = 0
@@ -1418,27 +1502,20 @@ class Led(Feature):
         FLASHER = 6
         BATTERY = 7
 
-    def __init__(
-        self,
-        profile: ratbag.Profile,
-        index: int,
-        *,
-        color: Tuple[int, int, int] = (0, 0, 0),
-        brightness: int = 0,
-        colordepth: Colordepth = Colordepth.RGB_888,
-        mode: Mode = Mode.OFF,
-        modes: Tuple[Mode, ...] = (Mode.OFF,),
-        effect_duration: int = 0,
-    ):
-        super().__init__(profile.device, index)
-        self.profile = profile
-        self._color = color
-        self._colordepth = colordepth
-        self._brightness = brightness
-        self._effect_duration = effect_duration
-        self._mode = mode
-        self._modes = tuple(modes)
-        self.profile._add_led(self)
+    _profile: ratbag.Profile = attr.ib()
+    _color: Tuple[int, int, int] = attr.ib(default=(0, 0, 0))
+    _brightness: int = attr.ib(default=0)
+    _colordepth: Colordepth = attr.ib(default=Colordepth.RGB_888)
+    _mode: Mode = attr.ib(default=Mode.OFF)
+    _modes: Tuple[Mode, ...] = attr.ib(default=(Mode.OFF,))
+    _effect_duration: int = attr.ib(default=0)
+
+    def __attrs_post_init__(self):
+        self._profile._add_led(self)
+
+    @classmethod
+    def create(cls, profile: ratbag.Profile, index: int, **kwargs):
+        return cls(profile.device, index, profile, **kwargs)
 
     @GObject.Property(flags=GObject.ParamFlags.READABLE)
     def color(self) -> Tuple[int, int, int]:

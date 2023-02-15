@@ -4,6 +4,7 @@
 #
 # This file is formatted with Python Black
 
+import attr
 import click
 import logging
 import logging.config
@@ -12,7 +13,7 @@ import re
 import sys
 import yaml
 
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 try:
     from gi.repository import GLib
@@ -31,21 +32,36 @@ import ratbag
 import ratbag.emulator
 import ratbag.recorder
 
-logger = None
+# mypy doesn't like late initializations
+logger: logging.Logger = None  # type: ignore
 
 
+@attr.s
 class Config(object):
+    """
+    Abstraction of a device configuration file. Note that this is specific to
+    the ratbagcli tool only, device configuration is not handled by ratbag
+    itself.
+
+    So all the parsing, etc. is done here and then applied to the various
+    ratbag objects.
+    """
+
     class Error(Exception):
         pass
 
-    def __init__(self, filename, nocommit=False):
-        self.nocommit = nocommit
+    matches: List[str] = attr.ib(init=False, default=attr.Factory(list))
+    profiles: List[Dict[str, Any]] = attr.ib(init=False, default=attr.Factory(list))
 
+    @classmethod
+    def create_from_file(cls, filename: Path):
+        obj = cls()
         with open(filename) as fd:
             yml = yaml.safe_load(fd)
-        self._parse(yml)
+            obj.parse(yml)
+        return obj
 
-    def _parse(self, yml):
+    def parse(self, yml):
         self.matches = yml.get("matches", [])
         self.profiles = yml.get("profiles", [])
         if not self.profiles:
@@ -152,7 +168,13 @@ class Config(object):
 
         return False
 
-    def apply(self, device):
+    def apply(self, device: ratbag.Device, nocommit: bool = False):
+        """
+        Apply this configuration to the given device.
+
+        If nocommit is True, the config is applied to the virtual device but
+        not "committed" to the device itself.
+        """
         if not self._matches(device):
             return
 
@@ -259,7 +281,7 @@ class Config(object):
                     button.set_action(ratbag.ActionMacro(button, name, events))
                     continue
 
-        if not self.nocommit:
+        if not nocommit:
 
             def cb_commit_finished(transaction):
                 if not transaction.success:
@@ -269,10 +291,10 @@ class Config(object):
                 else:
                     logger.debug("done")
 
-            transaction = ratbag.CommitTransaction()
+            transaction = ratbag.CommitTransaction.create(device)
             transaction.connect("finished", cb_commit_finished)
 
-            device.commit(transaction)
+            transaction.commit()
             logger.debug("Waiting for device to commit")
 
     def verify(self, device):
@@ -396,21 +418,28 @@ class Config(object):
                         continue
 
 
-def _init_logger(conf=None, verbose=False):
-    if conf is None:
-        conf = Path("config-logger.yml")
-        if not conf.exists():
-            xdg = os.getenv("XDG_CONFIG_HOME")
-            if xdg is None:
-                xdg = Path.home() / ".config"
-            conf = Path(xdg) / "ratbag" / "config-logger.yml"
+def _init_logger_config(conf: Optional[Path]) -> None:
+    """
+    Initialize the logging configuration based on a logger config file
+    """
+    conf = conf or Path("config-logger.yml")
+    if not conf.exists():
+        xdg = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
+        conf = xdg / "ratbag" / "config-logger.yml"
     if Path(conf).exists():
         with open(conf) as fd:
             yml = yaml.safe_load(fd)
         logging.config.dictConfig(yml)
     else:
-        lvl = logging.DEBUG if verbose else logging.INFO
-        logging.basicConfig(format="%(levelname)s: %(name)s: %(message)s", level=lvl)
+        _init_logger(verbose=False)
+
+
+def _init_logger(verbose: bool) -> None:
+    """
+    Initialize the logging configuration based on a verbosity level
+    """
+    lvl = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(format="%(levelname)s: %(name)s: %(message)s", level=lvl)
 
 
 def _init_emulators(infile):
@@ -419,6 +448,7 @@ def _init_emulators(infile):
 
 @click.group()
 @click.option("--verbose", count=True, help="Enable debug logging")
+@click.option("--quiet", is_flag=True, help="Disable debug logging")
 @click.option(
     "--log-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -435,15 +465,24 @@ def _init_emulators(infile):
     type=click.Path(dir_okay=False, path_type=Path),
 )
 @click.pass_context
-def ratbagcli(ctx, verbose: int, log_config: Path, record: Path, replay: Path):
+def ratbagcli(
+    ctx, verbose: int, quiet: bool, log_config: Path, record: Path, replay: Path
+):
     global logger
 
-    _init_logger(log_config, verbose >= 1)
+    if quiet:
+        _init_logger(verbose=False)
+    elif verbose >= 1:
+        _init_logger(verbose=True)
+    else:
+        _init_logger_config(log_config)
+
     logger = logging.getLogger("ratbagcli")
 
     ctx.obj = {}
-    if record:
-        ctx.obj["blackbox"] = ratbag.Blackbox(directory=record)
+    ctx.obj["blackbox"] = ratbag.Blackbox.create(
+        directory=record or ratbag.Blackbox.default_recordings_directory()
+    )
     if replay:
         ctx.obj["emulators"] = _init_emulators(replay)
 
@@ -459,12 +498,15 @@ def ratbagcli_apply_config(ctx, nocommit: bool, config: Path, name: Optional[str
     """
     Apply the given config to the device.
 
+    If the --nocommit option is given, the configuration is applied to the
+    virtual device but not actually sent to the physical device.
+
     If a device name is given, only devices with that name are
-    configured. The name may be a part of the name, e.g. G303 matches the
+    configured. The name may be a part of the name, e.g. "G303" matches the
     "Logitech G303" device.
     """
     try:
-        user_config = Config(config, nocommit)
+        user_config = Config.create_from_file(filename=config)
     except Config.Error as e:
         click.secho(f"Config error in {config}: {str(e)}. Aborting", fg="red")
         sys.exit(1)
@@ -477,7 +519,7 @@ def ratbagcli_apply_config(ctx, nocommit: bool, config: Path, name: Optional[str
 
         def cb_device_added(ratbagcli, device):
             if name is None or name in device.name:
-                user_config.apply(device)
+                user_config.apply(device, nocommit)
                 GLib.idle_add(lambda: mainloop.quit())
 
         ratbagd.connect("device-added", cb_device_added)
@@ -499,11 +541,11 @@ def ratbagcli_verify_config(ctx, config: Path, name: Optional[str]):
     stored on the device.
 
     If a device name is given, only devices with that name are
-    verified. The name may be a part of the name, e.g. G303 matches the
+    verified. The name may be a part of the name, e.g. "G303" matches the
     "Logitech G303" device.
     """
     try:
-        user_config = Config(config, False)
+        user_config = Config.create_from_file(filename=config)
     except Config.Error as e:
         click.secho(f"Config error in {config}: {str(e)}. Aborting", fg="red")
         sys.exit(1)
@@ -536,7 +578,7 @@ def ratbagcli_show(ctx, name: str):
     Show current configuration of a device
 
     If a device name is given, only devices with that name are
-    shown. The name may be a part of the name, e.g. G303 matches the
+    shown. The name may be a part of the name, e.g. "G303" matches the
     "Logitech G303" device.
     """
     try:
@@ -563,11 +605,17 @@ def ratbagcli_show(ctx, name: str):
 @click.pass_context
 def ratbagcli_list(ctx):
     """
-    List all connected devices
+    List all connected supported devices
 
     If a device name is given, only devices with that name are
-    listed. The name may be a part of the name, e.g. G303 matches the
+    listed. The name may be a part of the name, e.g. "G303" matches the
     "Logitech G303" device.
+
+    The device must be accessible to the user running this command, in many
+    cases this requires the command to be run as root.
+
+    If a device is currently connected but not listed, it is not (yet)
+    supported by ratbag.
     """
     try:
         mainloop = GLib.MainLoop()
@@ -590,7 +638,7 @@ def ratbagcli_list(ctx):
         mainloop.run()
 
         if not devices:
-            click.echo("# No devices available")
+            click.echo("# No supported devices available")
     except KeyboardInterrupt:
         pass
 
@@ -599,7 +647,8 @@ def ratbagcli_list(ctx):
 @click.pass_context
 def ratbagcli_list_supported(ctx):
     """
-    List all known devices
+    List all known devices. The output of this command is YAML-compatible and
+    can be processed with the appropriate tools.
     """
     from ratbag.util import load_data_files
 
@@ -626,6 +675,15 @@ def ratbagcli_list_supported(ctx):
 
     if not devices:
         click.echo("# No supported devices found. This is an installation issue")
+
+
+@ratbagcli.command(name="help")
+@click.pass_context
+def ratbagcli_help(ctx):
+    """
+    Print this help output.
+    """
+    click.echo(ratbagcli.get_help(ctx))
 
 
 if __name__ == "__main__":

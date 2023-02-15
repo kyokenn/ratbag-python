@@ -40,6 +40,15 @@ def as_hex(bs: bytes) -> str:
     return " ".join(["".join(s) for s in zip(hx[::2], hx[1::2])])
 
 
+def ffs(x: int) -> int:
+    if x == 0:
+        return 0
+    elif x & 0x1:
+        return 1
+    else:
+        return ffs(x >> 1) + 1
+
+
 def add_to_sparse_tuple(tpl: Tuple, index: int, new_value) -> Tuple:
     """
     Return a new tuple based on tpl with new_value added at the given index.
@@ -135,3 +144,17 @@ def load_data_files() -> List[DataFile]:
         raise FileNotFoundError("Unable to find data files")
 
     return files
+
+
+def to_tuple(x) -> Tuple:
+    try:
+        return tuple(set(x))
+    except TypeError as e:
+        raise ValueError("Invalid value: {e}")
+
+
+def to_sorted_tuple(x) -> Tuple:
+    try:
+        return tuple(sorted(set(x)))
+    except TypeError as e:
+        raise ValueError("Invalid value: {e}")
