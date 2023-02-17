@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" >
 <head>
-  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ratbag &mdash; libratbag  documentation</title>
@@ -16,6 +16,7 @@
         <script src="_static/underscore.js"></script>
         <script src="_static/_sphinx_javascript_frameworks_compat.js"></script>
         <script src="_static/doctools.js"></script>
+        <script src="_static/sphinx_highlight.js"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
@@ -28,11 +29,15 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-            <a href="index.html" class="icon icon-home"> libratbag
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            libratbag
           </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
@@ -59,8 +64,8 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="index.html" class="icon icon-home"></a> &raquo;</li>
-      <li>ratbag</li>
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">ratbag</li>
       <li class="wy-breadcrumbs-aside">
             <a href="_sources/modules.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -83,7 +88,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ratbag.drivers.html#ratbag-drivers-hidpp20-module">ratbag.drivers.hidpp20 module</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ratbag.drivers.html#ratbag-drivers-openinput-module">ratbag.drivers.openinput module</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ratbag.drivers.html#ratbag-drivers-roccat-module">ratbag.drivers.roccat module</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ratbag.drivers.html#module-ratbag.drivers">Module contents</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ratbag.drivers.html#module-contents">Module contents</a></li>
 </ul>
 </li>
 </ul>
@@ -92,10 +97,27 @@
 <li class="toctree-l2"><a class="reference internal" href="ratbag.html#ratbag-driver-module">ratbag.driver module</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ratbag.html#ratbag-emulator-module">ratbag.emulator module</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ratbag.html#ratbag-hid-module">ratbag.hid module</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ratbag.html#module-ratbag.parser">ratbag.parser module</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ratbag.html#module-ratbag.recorder">ratbag.recorder module</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ratbag.html#module-ratbag.util">ratbag.util module</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ratbag.html#module-ratbag">Module contents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ratbag.html#ratbag-parser-module">ratbag.parser module</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ratbag.html#ratbag-recorder-module">ratbag.recorder module</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ratbag.html#module-ratbag.util">ratbag.util module</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="ratbag.html#ratbag.util.as_hex"><code class="docutils literal notranslate"><span class="pre">as_hex()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="ratbag.html#ratbag.util.ffs"><code class="docutils literal notranslate"><span class="pre">ffs()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="ratbag.html#ratbag.util.add_to_sparse_tuple"><code class="docutils literal notranslate"><span class="pre">add_to_sparse_tuple()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="ratbag.html#ratbag.util.find_hidraw_devices"><code class="docutils literal notranslate"><span class="pre">find_hidraw_devices()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="ratbag.html#ratbag.util.DataFile"><code class="docutils literal notranslate"><span class="pre">DataFile</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="ratbag.html#ratbag.util.DataFile.name"><code class="docutils literal notranslate"><span class="pre">DataFile.name</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="ratbag.html#ratbag.util.DataFile.matches"><code class="docutils literal notranslate"><span class="pre">DataFile.matches</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="ratbag.html#ratbag.util.DataFile.driver"><code class="docutils literal notranslate"><span class="pre">DataFile.driver</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="ratbag.html#ratbag.util.DataFile.driver_options"><code class="docutils literal notranslate"><span class="pre">DataFile.driver_options</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="ratbag.html#ratbag.util.DataFile.from_config_parser"><code class="docutils literal notranslate"><span class="pre">DataFile.from_config_parser()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="ratbag.html#ratbag.util.load_data_files"><code class="docutils literal notranslate"><span class="pre">load_data_files()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="ratbag.html#ratbag.util.to_tuple"><code class="docutils literal notranslate"><span class="pre">to_tuple()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="ratbag.html#ratbag.util.to_sorted_tuple"><code class="docutils literal notranslate"><span class="pre">to_sorted_tuple()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="ratbag.html#module-contents">Module contents</a></li>
 </ul>
 </li>
 </ul>
