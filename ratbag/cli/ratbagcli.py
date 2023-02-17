@@ -219,11 +219,11 @@ class Config(object):
                     logger.info(
                         f"Disabling resolution {profile.index}.{resolution.index}"
                     )
-                    resolution.enabled = False
+                    resolution._enabled = False
                     continue
                 dpis = rconf.get("dpi", None)
                 if dpis:
-                    resolution.enabled = True
+                    resolution._enabled = True
                     resolution.set_dpi(dpis)
 
             # Buttons
@@ -589,7 +589,8 @@ def ratbagcli_show(ctx, name: str):
 
         def cb_device_added(ratbagcli, device):
             if name is None or name in device.name:
-                device_dict = {"devices": [device.as_dict()]}
+                # device_dict = {"devices": [device.as_dict()]}
+                device_dict = device.as_dict()
                 click.echo(yaml.dump(device_dict, default_flow_style=None))
 
         ratbagd.connect("device-added", cb_device_added)
