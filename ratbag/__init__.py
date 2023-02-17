@@ -15,6 +15,8 @@ import logging
 
 import ratbag.util
 
+from .hid import Key
+
 
 logger = logging.getLogger(__name__)
 
@@ -1051,7 +1053,7 @@ class Action(GObject.Object):
         NONE = 0
         BUTTON = 1
         SPECIAL = 2
-        # KEY is 3 in libratbag
+        KEY = 3
         MACRO = 4
         UNKNOWN = 1000
 
@@ -1131,6 +1133,33 @@ class ActionButton(Action):
 
     def __eq__(self, other):
         return type(self) == type(other) and self.button == other.button
+
+
+@attr.s
+class ActionKey(Action):
+    _key: Key = attr.ib()
+
+    @classmethod
+    def create(cls, key: Key) -> "ActionKey":
+        return cls(type=Action.Type.KEY, key=key)
+
+    @property
+    def key(self) -> Key:
+        return self._key
+
+    def __str__(self) -> str:
+        return f"Key {self.key.name}"
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            **super().as_dict(),
+            **{
+                "key": self.key.name,
+            },
+        }
+
+    def __eq__(self, other):
+        return type(self) == type(other) and self.key == other.key
 
 
 @attr.s

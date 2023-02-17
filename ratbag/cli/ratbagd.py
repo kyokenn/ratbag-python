@@ -278,8 +278,8 @@ class RatbagButton(ServiceInterface):
             value = dbus_next.Variant("u", int(action.button))
         elif action.type == ratbag.Action.Type.SPECIAL:
             value = dbus_next.Variant("u", int(action.special))
-        # elif action.type == ratbag.Action.Type.KEY:
-        #    value = dbus_next.Variant("u", int(ratbag.Action.Type.UNKNOWN))  # FIXME
+        elif action.type == ratbag.Action.Type.KEY:
+            value = dbus_next.Variant("u", int(action.key))
         elif action.type == ratbag.Action.Type.MACRO:
             value = dbus_next.Variant(
                 "a(uu)", [[e[0].value, e[1]] for e in action.events]
@@ -301,8 +301,8 @@ class RatbagButton(ServiceInterface):
             action = ratbag.ActionSpecial(
                 self._button, ratbag.ActionSpecial.Special(variant.value)
             )
-        # if action.type == ratbag.Action.Type.KEY:
-        #    action = None  # FIXME
+        if action.type == ratbag.Action.Type.KEY:
+            action = ratbag.ActionKey(self._button, variant.value)
         if action.type == ratbag.Action.Type.MACRO:
             events = [(ratbag.ActionMacro.Event(t), v) for t, v in variant.value]
             action = ratbag.ActionMacro(self._button, events=events)
