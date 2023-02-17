@@ -186,9 +186,9 @@ class RatbagLed(ServiceInterface):
         self._bus = bus
         self.objpath = make_path(
             "device",
-            ratbag_led.profile.device.path.name,
+            ratbag_led._profile.device.path.name,
             "p",
-            ratbag_led.profile.index,
+            ratbag_led._profile.index,
             "l",
             ratbag_led.index,
         )
@@ -257,9 +257,9 @@ class RatbagButton(ServiceInterface):
         self._bus = bus
         self.objpath = make_path(
             "device",
-            ratbag_button.profile.device.path.name,
+            ratbag_button._profile.device.path.name,
             "p",
-            ratbag_button.profile.index,
+            ratbag_button._profile.index,
             "b",
             ratbag_button.index,
         )
