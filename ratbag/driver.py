@@ -410,7 +410,7 @@ class DeviceInfo:
                 bid, vid, pid = map(lambda x: int(x, 16), hidstr.split(":"))
                 bus = {3: "usb", 5: "bluetooth"}[bid]
             except (ValueError, KeyError):
-                pass
+                bus = "usb"
         else:
             vid = int(vidstr, 16)  # type: ignore
             pid = int(pidstr, 16)  # type: ignore
