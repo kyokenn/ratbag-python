@@ -130,7 +130,8 @@ def load_driver_by_name(driver_name: str) -> Optional[Type["Driver"]]:
         try:
             import importlib
 
-            for mod in pathlib.Path("ratbag/drivers/").glob("*.py"):
+            ratbag_dir = os.path.dirname(__file__)
+            for mod in pathlib.Path(f"{ratbag_dir}/drivers/").glob("*.py"):
                 importlib.import_module(f"ratbag.drivers.{mod.name[:-3]}")
         except ImportError as e:
             logger.warning(f"Importing ratbag.drivers.{mod} failed: {e}")
