@@ -4,6 +4,14 @@ ratbag.drivers package
 Submodules
 ----------
 
+ratbag.drivers.asus module
+--------------------------
+
+.. automodule:: ratbag.drivers.asus
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 ratbag.drivers.example\_driver module
 -------------------------------------
 
