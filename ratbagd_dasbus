@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+
+import ratbag.cli.ratbagd_dasbus
+
+if __name__ == "__main__":
+    ratbag.cli.ratbagd_dasbus.main()
