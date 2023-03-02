@@ -1,0 +1,12 @@
+[Device]
+Name=ASUS ROG Keris Wireless AimPoint
+DeviceMatch=usb:0b05:1a68;usb:0b05:1a66
+Driver=asus
+
+[Driver/asus]
+Profiles=5
+Buttons=8
+Leds=1
+Dpis=4
+Wireless=1
+DpiRange=100:36000@100

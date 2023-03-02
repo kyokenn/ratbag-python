@@ -1,0 +1,12 @@
+[Device]
+Name=ASUS ROG Gladius III Wireless AimPoint
+DeviceMatch=usb:0b05:1a70;usb:0b05:1a72
+Driver=asus
+
+[Driver/asus]
+Profiles=5
+Buttons=9
+Leds=1
+Dpis=4
+Wireless=1
+DpiRange=100:36000@100
