@@ -448,7 +448,7 @@ class RatbagdManager(ServiceInterface):
 
     @dbus_property(access=PropertyAccess.READ)
     def APIVersion(self) -> "i":  # type: ignore
-        return 1
+        return 2
 
     @dbus_property(access=PropertyAccess.READ)
     def Devices(self) -> "ao":  # type: ignore
@@ -457,6 +457,9 @@ class RatbagdManager(ServiceInterface):
     def cb_device_added(self, ratbagd, device):
         logger.info(f"exporting device {device.name}")
         self._devices.append(RatbagdDevice(self._bus, device))
+        self.emit_properties_changed({
+            'Devices': [d.objpath for d in self._devices],
+        })
 
 
 class Ratbagd(object):
