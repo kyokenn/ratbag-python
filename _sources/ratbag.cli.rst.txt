@@ -1,0 +1,37 @@
+ratbag.cli package
+==================
+
+Submodules
+----------
+
+ratbag.cli.ratbagcli module
+---------------------------
+
+.. automodule:: ratbag.cli.ratbagcli
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+ratbag.cli.ratbagd module
+-------------------------
+
+.. automodule:: ratbag.cli.ratbagd
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+ratbag.cli.ratbagd\_dasbus module
+---------------------------------
+
+.. automodule:: ratbag.cli.ratbagd_dasbus
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Module contents
+---------------
+
+.. automodule:: ratbag.cli
+   :members:
+   :undoc-members:
+   :show-inheritance:
