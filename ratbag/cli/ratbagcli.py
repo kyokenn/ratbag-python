@@ -108,6 +108,16 @@ class Config(object):
                             f"Button {pidx}.{bidx}: invalid button number {button}"
                         )
 
+                key = b.get("key", None)
+                if key:
+                    name = key.replace("-", "_").upper()
+                    try:
+                        b["key"] = ratbag.ActionKey.Key[name]
+                    except KeyError:
+                        raise Config.Error(
+                            f"Button {pidx}.{bidx}: unknown key action {key}"
+                        )
+
                 special = b.get("special", None)
                 if special:
                     name = special.replace("-", "_").upper()
