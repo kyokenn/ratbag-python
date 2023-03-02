@@ -1,0 +1,11 @@
+[Device]
+Name=ASUS TUF Gaming M3
+DeviceMatch=usb:0b05:1910
+Driver=asus
+
+[Driver/asus]
+Profiles=3
+Buttons=10
+Leds=1
+Dpis=4
+DpiRange=200:7000@100

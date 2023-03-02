@@ -1,0 +1,12 @@
+[Device]
+Name=ASUS ROG Gladius III
+DeviceMatch=usb:0b05:197b
+Driver=asus
+
+[Driver/asus]
+Profiles=5
+Buttons=9
+Leds=3
+Dpis=4
+DpiRange=100:26000@100
+Quirks=DOUBLE_DPI

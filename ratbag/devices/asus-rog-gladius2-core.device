@@ -1,0 +1,13 @@
+# "ASUS ROG Gladius II Origin" lite version, but with 4 DPI presets
+[Device]
+Name=ASUS ROG Gladius II Core
+DeviceMatch=usb:0b05:18dd
+Driver=asus
+
+[Driver/asus]
+Profiles=3
+Buttons=8
+Leds=2
+Dpis=4
+DpiRange=200:6200@100
+Quirks=DOUBLE_DPI
