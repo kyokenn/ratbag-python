@@ -394,6 +394,7 @@ class Device(GObject.Object):
     model: str = attr.ib(default="")
     """The device model, a more precise identifier (where available)"""
     firmware_version: str = attr.ib(default="")
+    devicetype: int = attr.ib(default=0)
     """
     A device-specific string with the firmware version, or the empty
     string. For devices with a major/minor or purely numeric firmware
