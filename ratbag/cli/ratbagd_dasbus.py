@@ -299,23 +299,26 @@ class RatbagButton(InterfaceTemplate):
         return [action.type.value, value]
 
     @Mapping.setter
+    @emits_properties_changed
     def Mapping(self, mapping: Tuple[UInt32, Variant]):
-        return
         type = mapping[0]
         variant = mapping[1]
 
-        if type == int(ratbag.Action.Type.BUTTON):
-            action = ratbag.ActionButton(self._button, variant.value)
-        elif action.type == ratbag.Action.Type.SPECIAL:
-            action = ratbag.ActionSpecial(
-                self._button, ratbag.ActionSpecial.Special(variant.value)
+        if type == ratbag.Action.Type.BUTTON:
+            action = ratbag.ActionButton.create(variant.get_uint32())
+        elif type == ratbag.Action.Type.SPECIAL:
+            action = ratbag.ActionSpecial.create(
+                ratbag.ActionSpecial.Special(variant.get_uint32())
             )
-        if action.type == ratbag.Action.Type.KEY:
-            action = ratbag.ActionKey(self._button, Key.from_evdev(variant.value))
-        if action.type == ratbag.Action.Type.MACRO:
-            events = [(ratbag.ActionMacro.Event(t), v) for t, v in variant.value]
-            action = ratbag.ActionMacro(self._button, events=events)
+        elif type == ratbag.Action.Type.KEY:
+            action = ratbag.ActionKey.create(Key.from_evdev(variant.get_uint32()))
+        elif type == ratbag.Action.Type.MACRO:
+            events = [(ratbag.ActionMacro.Event(t), v) for t, v in variant]
+            action = ratbag.ActionMacro.create(events=events)
+        else:
+            raise Exception(make_name("ValueError"), "Invalid action type")
         self._button.set_action(action)
+        self.report_changed_property('Mapping')
 
     @property
     def ActionTypes(self) -> List[UInt32]:
