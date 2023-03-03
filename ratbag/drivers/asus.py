@@ -74,6 +74,7 @@ ASUS_FIELD_RESPONSE = 1
 ASUS_FIELD_SNAPPING = 2
 
 ASUS_POLLING_RATES = (125, 250, 500, 1000)
+ASUS_DEBOUNCE_TIMES = (4, 8, 12, 16, 20, 24, 28, 32)
 
 
 def asus_find_button_by_action(action):
@@ -314,6 +315,13 @@ class AsusDevice(GObject.Object):
         data['rate'] = ASUS_POLLING_RATES[rate_id]
         offset += 2
 
+        debounce_id = struct.unpack('<h', results[offset:offset + 2])[0]
+        data['response'] = ASUS_DEBOUNCE_TIMES[debounce_id]
+        offset += 2
+
+        data['snapping'] = struct.unpack('<h', results[offset:offset + 2])[0]
+        offset += 2
+
         return data
 
     def _set_dpi(self, index, dpi):
@@ -343,7 +351,7 @@ class AsusDevice(GObject.Object):
         request = [0] * ASUS_PACKET_SIZE
         request[0:2] = struct.pack('<h', ASUS_CMD_SET_SETTING)
         request[2] = self._get_dpi_count() + ASUS_FIELD_RESPONSE  # field index to set
-        request[4] = int(ms / 4 - 1)
+        request[4] = ASUS_DEBOUNCE_TIMES.index(ms)
 
         self._query(request)
 
@@ -435,6 +443,8 @@ class AsusDevice(GObject.Object):
         resolution_data = self._get_resolution_data()
 
         profile._report_rate = resolution_data['rate']
+        profile._angle_snapping = resolution_data['snapping']
+        profile._debounce = resolution_data['response']
         for resolution in profile.resolutions:
             resolution._dpi = (
                 resolution_data['dpi'][resolution.index],
@@ -495,10 +505,13 @@ class AsusDevice(GObject.Object):
                         ASUS_BUTTON_ACTION_TYPE_BUTTON)
 
         # set extra settings
-        # if profile.rate_dirty:
-        if profile.dirty:
+        if profile.dirty:  # TODO: separate dirty flag for each option
             logger.debug('Polling rate changed to %d Hz' % profile.report_rate)
             self._set_polling_rate(profile.report_rate)
+            logger.debug('Angle snapping changed to %d' % profile.angle_snapping)
+            self._set_angle_snapping(profile.angle_snapping)
+            logger.debug('Debounce time changed to %d' % profile.debounce)
+            self._set_button_response(profile.debounce)
 
         # set DPIs
         for resolution in profile.resolutions:
@@ -621,6 +634,7 @@ class AsusDevice(GObject.Object):
                 index=profile_index,
                 name=f'Profile {profile_index}',
                 report_rates=ASUS_POLLING_RATES,
+                debounces=ASUS_DEBOUNCE_TIMES,
                 capabilities=(
                     ratbag.Profile.Capability.INDIVIDUAL_REPORT_RATE,))
             profile.connect('notify::active', self.set_active_profile)

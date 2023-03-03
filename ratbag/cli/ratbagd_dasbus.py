@@ -384,6 +384,30 @@ class RatbagProfile(InterfaceTemplate):
         self.report_changed_property('ReportRate')
 
     @property
+    def AngleSnapping(self) -> Int32:
+        return self._profile.angle_snapping
+
+    @AngleSnapping.setter
+    @emits_properties_changed
+    def AngleSnapping(self, value: Int32):
+        self._profile.set_angle_snapping(value)
+        self.report_changed_property('AngleSnapping')
+
+    @property
+    def Debounces(self) -> List[UInt32]:
+        return list(self._profile.debounces)
+
+    @property
+    def Debounce(self) -> Int32:
+        return self._profile.debounce
+
+    @Debounce.setter
+    @emits_properties_changed
+    def Debounce(self, ms: Int32):
+        self._profile.set_debounce(ms)
+        self.report_changed_property('Debounce')
+
+    @property
     def IsActive(self) -> Bool:
         return self._profile.active
 

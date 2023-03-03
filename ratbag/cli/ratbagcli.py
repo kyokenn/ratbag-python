@@ -88,6 +88,24 @@ class Config(object):
                         f"Profile {pidx}: invalid report rate {report_rate}"
                     )
 
+            angle_snapping = p.get("angle-snapping", None)
+            if angle_snapping is not None:
+                try:
+                    p["angle-snapping"] = int(angle_snapping)
+                except ValueError:
+                    raise Config.Error(
+                        f"Profile {pidx}: invalid angle snapping {angle_snapping}"
+                    )
+
+            debounce = p.get("debounce", None)
+            if debounce is not None:
+                try:
+                    p["debounce"] = int(debounce)
+                except ValueError:
+                    raise Config.Error(
+                        f"Profile {pidx}: invalid debounce time {debounce}"
+                    )
+
             # Buttons
             for bidx, b in enumerate(p.get("buttons", [])):
                 if "index" not in b:
@@ -211,6 +229,16 @@ class Config(object):
             if report_rate is not None:
                 logger.info(f"Report rate for {profile.index} is now {report_rate}")
                 profile.set_report_rate(report_rate)
+
+            angle_snapping = pconf.get("angle-snapping", None)
+            if angle_snapping is not None:
+                logger.info(f"Angle snapping for {profile.index} is now {angle_snapping}")
+                profile.set_angle_snapping(angle_snapping)
+
+            debounce = pconf.get("debounce", None)
+            if debounce is not None:
+                logger.info(f"Debounce time for {profile.index} is now {debounce}")
+                profile.set_debounce(debounce)
 
             # Resolutions
             for rconf in pconf.get("resolutions", []):

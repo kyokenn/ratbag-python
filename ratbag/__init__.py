@@ -677,6 +677,8 @@ class Profile(Feature):
 
     name: str = attr.ib()
     _report_rate: int = attr.ib(default=None)
+    _angle_snapping: int = attr.ib(default=-1)
+    _debounce: int = attr.ib(default=-1)
     _active: bool = attr.ib(default=False)
     _enabled: bool = attr.ib(default=True)
     _default: bool = attr.ib(default=False)
@@ -685,6 +687,7 @@ class Profile(Feature):
     _resolutions: Tuple = attr.ib(default=attr.Factory(tuple))
     _leds: Tuple = attr.ib(default=attr.Factory(tuple))
     _report_rates: Tuple = attr.ib(default=attr.Factory(tuple))
+    _debounces: Tuple = attr.ib(default=attr.Factory(tuple))
 
     @name.default
     def _name_default(self):
@@ -742,6 +745,48 @@ class Profile(Feature):
         """The tuple of supported report rates in Hz. If the device does not
         support configurable report rates, the tuple is the empty tuple"""
         return self._report_rates
+
+    @GObject.Property(type=int, default=0, flags=GObject.ParamFlags.READABLE)
+    def angle_snapping(self) -> int:
+        """The angle snapping option. If the profile does not support configurable
+        (or queryable) angle snapping time, the angle snapping is always ``-1``"""
+        return self._angle_snapping
+
+    def set_angle_snapping(self, value: int) -> None:
+        """
+        Set the angle snapping for this profile.
+
+        :raises: ConfigError
+        """
+        if value != self._angle_snapping:
+            self._angle_snapping = value
+            self.dirty = True  # type: ignore
+            self.notify("angle_snapping")
+
+    @GObject.Property(type=int, default=0, flags=GObject.ParamFlags.READABLE)
+    def debounce(self) -> int:
+        """The debounce time in ms. If the profile does not support configurable
+        (or queryable) debounce time, the debounce time is always ``-1``"""
+        return self._debounce
+
+    def set_debounce(self, ms: int) -> None:
+        """
+        Set the debounce time for this profile.
+
+        :raises: ConfigError
+        """
+        if ms not in self._debounces:
+            raise ConfigError(f"{ms} is not a supported debounce time")
+        if ms != self._debounce:
+            self._debounce = ms
+            self.dirty = True  # type: ignore
+            self.notify("debounce")
+
+    @property
+    def debounces(self) -> Tuple[int, ...]:
+        """The tuple of supported debounce times in ms. If the device does not
+        support configurable debounce times, the tuple is the empty tuple"""
+        return self._debounces
 
     @property
     def capabilities(self) -> Tuple[Capability, ...]:
@@ -844,6 +889,9 @@ class Profile(Feature):
             "buttons": [b.as_dict() for b in self.buttons],
             "report_rates": [r for r in self.report_rates],
             "report_rate": self.report_rate or 0,
+            "angle_snapping": self.angle_snapping,
+            "debounces": [r for r in self.debounces],
+            "debounce": self.debounce or 0,
             "leds": [l.as_dict() for l in self.leds],
         }
 
