@@ -186,6 +186,48 @@ class Config(object):
                                 f"Resolution {pidx}.{ridx}: dpi must an (x, y) tuple"
                             )
 
+            # Leds
+            for lidx, l in enumerate(p.get("leds", [])):
+                if "index" not in l:
+                    raise Config.Error(
+                        f"Led entry {lidx+1}, profile {pidx} has no 'index'"
+                    )
+                l["index"] = int(l["index"])
+                lidx = l["index"]
+                brightness = l.get("brightness", None)
+                if brightness:
+                    try:
+                        l["brightness"] = int(brightness)
+                    except ValueError:
+                        raise Config.Error(
+                            f"Led {pidx}.{lidx}: invalid brightness {brightness}"
+                        )
+                mode = l.get("mode", None)
+                if mode:
+                    try:
+                        l["mode"] = int(mode)
+                    except ValueError:
+                        try:
+                            modes = {'ON':1, 'CYCLE':2, 'BREATHING':3 }
+                            l["mode"] = modes[mode.upper()]
+                        except:
+                            raise Config.Error(
+                                f"Led {pidx}.{lidx}: invalid mode {mode}"
+                            )
+                color = l.get("color", None)
+                if color is not None:
+                    if len(color) != 3:
+                        raise Config.Error(
+                            f"Led {pidx}.{lidx}: color must an (r, g, b) list"
+                        )
+                    else:
+                        try:
+                            map(int, color)
+                        except ValueError:
+                            raise Config.Error(
+                                f"Led {pidx}.{lidx}: color must an (r, g, b) list"
+                            )
+
     def _matches(self, device):
         if not self.matches:
             return True
@@ -263,6 +305,32 @@ class Config(object):
                 if dpis:
                     resolution._enabled = True
                     resolution.set_dpi(dpis)
+
+            # Leds
+            for lconf in pconf.get("leds", []):
+                lidx = lconf["index"]
+                try:
+                    led = profile.leds[lidx]
+                except IndexError:
+                    logger.warning(
+                        f"Config references nonexisting led {pidx}.{lidx}. Skipping"
+                    )
+                    continue
+                logger.info(
+                    f"Config found for led {profile.index}.{led.index}"
+                )
+                brightness = lconf.get("brightness", None)
+                if brightness is not None:
+                    logger.info(f"Brightness for led {profile.index}.{led.index} is now {brightness}")
+                    led.set_brightness(brightness)
+                mode = lconf.get("mode", None)
+                if mode is not None:
+                    logger.info(f"Mode for led {profile.index}.{led.index} is now {mode}")
+                    led.set_mode(mode)
+                color = lconf.get("color", None)
+                if color is not None:
+                    logger.info(f"Color for led {profile.index}.{led.index} is now {color}")
+                    led.set_color(color)
 
             # Buttons
             for bconf in pconf.get("buttons", []):
