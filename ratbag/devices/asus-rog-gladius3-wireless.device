@@ -1,6 +1,6 @@
 [Device]
 Name=ASUS ROG Gladius III Wireless
-DeviceMatch=usb:0b05:197f
+DeviceMatch=usb:0b05:197f;usb:0b05:197d
 Driver=asus
 
 [Driver/asus]
