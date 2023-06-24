@@ -536,11 +536,15 @@ class AsusDevice(GObject.Object):
             self._set_led(led.index, led_mode, led_brightness, led.color)
 
     def load_profiles(self):
+        current_profile_id = 0
+
         # get current profile id
         profile_data = self._get_profile_data()
 
-        current_profile_id = profile_data['profile_id']
-        logger.debug('Initial profile is %d' % current_profile_id)
+        if len(self.ratbag_device.profiles) > 1:
+            current_profile_id = profile_data['profile_id']
+            logger.debug('Initial profile is %d' % current_profile_id)
+
         logger.debug('Primary version %02X.%02X.%02X' % (
             profile_data['version_primary_major'],
             profile_data['version_primary_minor'],
@@ -561,16 +565,19 @@ class AsusDevice(GObject.Object):
             self.load_profile(profile)
 
         # back to initial profile
-        if len(self.ratbag_device.profiles):
+        if len(self.ratbag_device.profiles) > 1:
             logger.debug('Switching back to initial profile %d' % current_profile_id)
             self._set_profile(current_profile_id)
 
     def save_profiles(self):
-        # get current profile id
-        profile_data = self._get_profile_data()
+        current_profile_id = 0
 
-        current_profile_id = profile_data['profile_id']
-        logger.debug('Initial profile is %d' % current_profile_id)
+        # get current profile id
+        if len(self.ratbag_device.profiles) > 1:
+            profile_data = self._get_profile_data()
+
+            current_profile_id = profile_data['profile_id']
+            logger.debug('Initial profile is %d' % current_profile_id)
 
         for profile in self.ratbag_device.profiles:
             if not profile.dirty:
@@ -590,7 +597,7 @@ class AsusDevice(GObject.Object):
             self._save_profile()
 
         # back to initial profile
-        if len(self.ratbag_device.profiles):
+        if len(self.ratbag_device.profiles) > 1:
             logger.debug('Switching back to initial profile %d' % current_profile_id)
             self._set_profile(current_profile_id)
 
