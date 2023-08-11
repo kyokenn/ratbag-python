@@ -264,6 +264,23 @@ class Config(object):
                     resolution._enabled = True
                     resolution.set_dpi(dpis)
 
+            # LEDs
+            for lconf in pconf.get("leds", []):
+                lidx = lconf["index"]
+                try:
+                    led = profile.leds[lidx]
+                except IndexError:
+                    logger.warning(
+                        f"Config references nonexisting LED {pidx}.{lidx}. Skipping"
+                    )
+                    continue
+                logger.info(
+                    f"Config found for LED {profile.index}.{led.index}"
+                )
+                led._brightness = lconf.get('brightness') or 0
+                led._color = lconf.get('color') or (0, 0, 0)
+                led._mode = getattr(ratbag.Led.Mode, lconf.get('mode') or 'ON')
+
             # Buttons
             for bconf in pconf.get("buttons", []):
                 bidx = bconf["index"]
