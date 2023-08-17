@@ -13,6 +13,8 @@ import re
 import sys
 import yaml
 
+from ratbag.hid import Key
+
 from typing import Any, Dict, List, Optional
 
 try:
@@ -117,7 +119,7 @@ class Config(object):
                 if not b.get("disable", True):
                     raise Config.Error(f"Button {pidx}.{bidx}: disable must be 'true'")
 
-                button = b.get("button", None)
+                button = b["action"].get("button", None)
                 if button:
                     try:
                         b["button"] = int(button)
@@ -126,17 +128,17 @@ class Config(object):
                             f"Button {pidx}.{bidx}: invalid button number {button}"
                         )
 
-                key = b.get("key", None)
+                key = b["action"].get("key", None)
                 if key:
                     name = key.replace("-", "_").upper()
                     try:
-                        b["key"] = ratbag.ActionKey.Key[name]
+                        b["key"] = Key[name]
                     except KeyError:
                         raise Config.Error(
                             f"Button {pidx}.{bidx}: unknown key action {key}"
                         )
 
-                special = b.get("special", None)
+                special = b["action"].get("special", None)
                 if special:
                     name = special.replace("-", "_").upper()
                     try:
@@ -297,7 +299,7 @@ class Config(object):
                 # button
                 if bconf.get("disable", False):
                     logger.info(f"Disabling button {profile.index}.{button.index}")
-                    button.set_action(ratbag.ActionNone(button))
+                    button.set_action(ratbag.ActionNone.create())
                     continue
 
                 # Button numbers
@@ -306,7 +308,7 @@ class Config(object):
                     logger.info(
                         f"Button {profile.index}.{button.index} sends button {bnumber}"
                     )
-                    button.set_action(ratbag.ActionButton(button, bnumber))
+                    button.set_action(ratbag.ActionButton.create(bnumber))
                     continue
 
                 # Button special
@@ -315,7 +317,16 @@ class Config(object):
                     logger.info(
                         f"Button {profile.index}.{button.index} sends special {special.name}"
                     )
-                    button.set_action(ratbag.ActionSpecial(button, special))
+                    button.set_action(ratbag.ActionSpecial.create(special))
+                    continue
+
+                # Button key
+                key = bconf.get("key", None)
+                if key is not None:
+                    logger.info(
+                        f"Button {profile.index}.{button.index} sends key {key.name}"
+                    )
+                    button.set_action(ratbag.ActionKey.create(key))
                     continue
 
                 # Button macro
@@ -333,7 +344,7 @@ class Config(object):
                     logger.info(
                         f"Button {profile.index}.{button.index} macro {str(events)}"
                     )
-                    button.set_action(ratbag.ActionMacro(button, name, events))
+                    button.set_action(ratbag.ActionMacro.create(name, events))
                     continue
 
         if not nocommit:
@@ -440,6 +451,7 @@ class Config(object):
                     ratbag.Action.Type.UNKNOWN: lambda b: "unknown",
                     ratbag.Action.Type.BUTTON: lambda b: f"button {b.action.button}",
                     ratbag.Action.Type.SPECIAL: lambda b: f"special {b.action.special.name}",
+                    ratbag.Action.Type.KEY: lambda b: f"key {b.action.key.name}",
                     ratbag.Action.Type.MACRO: lambda b: f"macro {str(b.action.macro)}",
                 }[button.action.type](button)
 
