@@ -1,5 +1,7 @@
 import logging
+import os
 import struct
+import yaml
 
 from gi.repository import GObject
 
@@ -7,16 +9,22 @@ import ratbag
 import ratbag.hid
 import ratbag.driver
 import ratbag.util
+
+from ratbag.cli import ratbagcli
 from ratbag.hid import Key
 
 logger = logging.getLogger(__name__)
+ratbagcli.logger = logger
 
+VAR_DIR = '/var/lib/ratbag'
 
 # asus.h
 
 ASUS_QUIRK_DOUBLE_DPI = 1 << 0
 ASUS_QUIRK_STRIX_PROFILE = 1 << 1
 ASUS_QUIRK_BATTERY_V2 = 1 << 2
+ASUS_QUIRK_RAW_BRIGHTNESS = 1 << 3
+ASUS_QUIRK_WRITE_ONLY = 1 << 4
 
 ASUS_PACKET_SIZE = 64
 ASUS_BUTTON_ACTION_TYPE_KEY = 0  # keyboard key
@@ -53,6 +61,17 @@ ASUS_BUTTON_MAPPING = (
     (0xed, ratbag.Action.Type.NONE, 0, 0),  # side button D
     (0xee, ratbag.Action.Type.NONE, 0, 0),  # side button E
     (0xef, ratbag.Action.Type.NONE, 0, 0),  # side button F
+    (0xd0, ratbag.Action.Type.NONE, 0, 0),  # joystick down
+    (0xd1, ratbag.Action.Type.NONE, 0, 0),  # joystick up
+    (0xd2, ratbag.Action.Type.NONE, 0, 0),  # joystick forward
+    (0xd3, ratbag.Action.Type.NONE, 0, 0),  # joystick backward
+)
+
+ASUS_JOYSTICK_MAPPING = (
+    (0xd7, ratbag.Action.Type.SPECIAL, 0, ratbag.ActionSpecial.Special.WHEEL_DOWN),  # joystick -Y
+    (0xd8, ratbag.Action.Type.SPECIAL, 0, ratbag.ActionSpecial.Special.WHEEL_UP),  # joystick +Y
+    (0xda, ratbag.Action.Type.SPECIAL, 0, ratbag.ActionSpecial.Special.WHEEL_RIGHT),  # joystick -X
+    (0xdb, ratbag.Action.Type.SPECIAL, 0, ratbag.ActionSpecial.Special.WHEEL_LEFT),  # joystick +X
 )
 
 # asus.c
@@ -77,12 +96,18 @@ ASUS_POLLING_RATES = (125, 250, 500, 1000)
 ASUS_DEBOUNCE_TIMES = (4, 8, 12, 16, 20, 24, 28, 32)
 
 
-def asus_find_button_by_action(action):
+def asus_find_button_by_action(action, is_joystick=False):
     """search for ASUS button by ratbag types"""
-    for i in range(len(ASUS_BUTTON_MAPPING)):
-        if ((action.type == ratbag.Action.Type.BUTTON and ASUS_BUTTON_MAPPING[i][2] == action.button) or
-                (action.type == ratbag.Action.Type.SPECIAL and ASUS_BUTTON_MAPPING[i][3] == action.special)):
-            return ASUS_BUTTON_MAPPING[i]
+    if is_joystick:
+        mappings = (ASUS_JOYSTICK_MAPPING, ASUS_BUTTON_MAPPING)
+    else:
+        mappings = (ASUS_BUTTON_MAPPING,)
+
+    for mapping in mappings:
+        for i in range(len(mapping)):
+            if ((action.type == ratbag.Action.Type.BUTTON and mapping[i][2] == action.button) or
+                    (action.type == ratbag.Action.Type.SPECIAL and mapping[i][3] == action.special)):
+                return mapping[i]
 
 
 def asus_find_button_by_code(asus_code):
@@ -200,6 +225,10 @@ class AsusDevice(GObject.Object):
                         self.quirks |= ASUS_QUIRK_DOUBLE_DPI
                     elif quirk == 'STRIX_PROFILE':
                         self.quirks |= ASUS_QUIRK_STRIX_PROFILE
+                    elif quirk == 'RAW_BRIGHTNESS':
+                        self.quirks |= ASUS_QUIRK_RAW_BRIGHTNESS
+                    elif quirk == 'WRITE_ONLY':
+                        self.quirks |= ASUS_QUIRK_WRITE_ONLY
                     else:
                         logger.debug('%s is invalid quirk. Ignoring...' % quirk)
         return self.quirks
@@ -378,7 +407,11 @@ class AsusDevice(GObject.Object):
             led = {}
             led['mode'] = results[offset]
             offset += 1
-            led['brightness'] = results[offset]
+            if self._get_quirks() & ASUS_QUIRK_RAW_BRIGHTNESS:
+                led['brightness'] = results[offset]
+            else:
+                # convert brightness from 0-4 to 0-255
+                led['brightness'] = min(results[offset] * 64, 255)
             offset += 1
             led['r'] = results[offset]
             offset += 1
@@ -396,7 +429,11 @@ class AsusDevice(GObject.Object):
         request[0:2] = struct.pack('<h', ASUS_CMD_SET_LED)
         request[2] = index
         request[4] = mode
-        request[5] = brightness
+        if self._get_quirks() & ASUS_QUIRK_RAW_BRIGHTNESS:
+            request[5] = min(brightness, 255)
+        else:
+            # convert brightness from 0-255 to 0-4
+            request[5] = round(brightness / 64.0)
         request[6:9] = color
 
         self._query(request)
@@ -446,9 +483,10 @@ class AsusDevice(GObject.Object):
         profile._angle_snapping = resolution_data['snapping']
         profile._debounce = resolution_data['response']
         for resolution in profile.resolutions:
-            resolution._dpi = (
-                resolution_data['dpi'][resolution.index],
-                resolution_data['dpi'][resolution.index])
+            dpi = resolution_data['dpi'][resolution.index]
+            if dpi not in resolution.dpi_list:
+                dpi = resolution.dpi_list[0]
+            resolution._dpi = (dpi, dpi)
 
         # get LEDs
 
@@ -457,8 +495,7 @@ class AsusDevice(GObject.Object):
 
         for led in profile.leds:
             led._mode = ASUS_LED_MODE[led_data[led.index]['mode']]
-            # convert brightness from 0-4 to 0-255
-            led._brightness = min(led_data[led.index]['brightness'] * 64, 255)
+            led._brightness = led_data[led.index]['brightness']
             led._color = (
                 led_data[led.index]['r'],
                 led_data[led.index]['g'],
@@ -497,7 +534,8 @@ class AsusDevice(GObject.Object):
                     ratbag.Action.Type.BUTTON,
                     ratbag.Action.Type.SPECIAL):
                 # ratbag action to ASUS code
-                asus_button = asus_find_button_by_action(button.action)
+                is_joystick = asus_code_src in (0xd0, 0xd1, 0xd2, 0xd3)
+                asus_button = asus_find_button_by_action(button.action, is_joystick=is_joystick)
                 if asus_button:  # found button to bind to
                     asus_code, action_type, button_code, special_code = asus_button
                     self._set_button_action(
@@ -530,10 +568,7 @@ class AsusDevice(GObject.Object):
 
             logger.debug('LED %d changed' % led.index)
             led_mode = ASUS_LED_MODE.index(led.mode)
-
-            # convert brightness from 0-256 to 0-4
-            led_brightness = round(led.brightness / 64.0)
-            self._set_led(led.index, led_mode, led_brightness, led.color)
+            self._set_led(led.index, led_mode, led.brightness, led.color)
 
     def load_profiles(self):
         current_profile_id = 0
@@ -568,6 +603,12 @@ class AsusDevice(GObject.Object):
         if len(self.ratbag_device.profiles) > 1:
             logger.debug('Switching back to initial profile %d' % current_profile_id)
             self._set_profile(current_profile_id)
+
+        if self._get_quirks() & ASUS_QUIRK_WRITE_ONLY:
+            device_file = os.path.join(VAR_DIR, self.ratbag_device.name)
+            if os.path.exists(device_file):
+                user_config = ratbagcli.Config.create_from_file(filename=device_file)
+                user_config.apply(self.ratbag_device, nocommit=False)
 
     def save_profiles(self):
         current_profile_id = 0
@@ -636,14 +677,16 @@ class AsusDevice(GObject.Object):
 
         # init & setup profiles
         for profile_index in range(max(profile_count, 1)):
+            caps = [ratbag.Profile.Capability.INDIVIDUAL_REPORT_RATE]
+            if self._get_quirks() & ASUS_QUIRK_RAW_BRIGHTNESS:
+                caps.append(ratbag.Profile.Capability.WRITE_ONLY)
             profile = ratbag.Profile(
                 self.ratbag_device,
                 index=profile_index,
                 name=f'Profile {profile_index}',
                 report_rates=ASUS_POLLING_RATES,
                 debounces=ASUS_DEBOUNCE_TIMES,
-                capabilities=(
-                    ratbag.Profile.Capability.INDIVIDUAL_REPORT_RATE,))
+                capabilities=caps)
             profile.connect('notify::active', self.set_active_profile)
 
             for button_index in range(max(button_count, 8)):
@@ -702,6 +745,14 @@ class AsusDevice(GObject.Object):
             return  # fail in any case because we tried to rollback instead of commit
 
         self.save_profiles()
+
+        if self._get_quirks() & ASUS_QUIRK_WRITE_ONLY:
+            if not os.path.exists(VAR_DIR):
+                os.makedirs(VAR_DIR)
+            device_file = os.path.join(VAR_DIR, self.ratbag_device.name)
+            with open(device_file, 'w') as f:
+                device_dict = self.ratbag_device.as_dict()
+                f.write(yaml.dump(device_dict, default_flow_style=None))
 
     def set_active_profile(self, profile, param):
         if profile.active:

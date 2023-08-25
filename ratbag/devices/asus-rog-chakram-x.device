@@ -1,14 +1,16 @@
 # "ASUS ROG Chakram X" & "ASUS ROG Chakram X Origin"
 [Device]
 Name=ASUS ROG Chakram X
-DeviceMatch=usb:0b05:1a18
+DeviceMatch=usb:0b05:1a18;usb:0b05:1a1a
 Driver=asus
 
 [Driver/asus]
-Profiles=3
-Buttons=5
+Profiles=5
+Buttons=14
 Leds=3
 Dpis=4
 Wireless=1
-DpiRange=100:36000@100
-Quirks=DOUBLE_DPI
+# should be "DpiRange=100:36000@100", but it's broken
+DpiRange=100:32000@100
+Quirks=DOUBLE_DPI;RAW_BRIGHTNESS;WRITE_ONLY
+ButtonMapping=f0;f1;f2;0;0;e6;e8;e9;d0;d1;d2;d3;ea;eb;ec;ed
